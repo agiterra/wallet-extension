@@ -1,17 +1,14 @@
 /**
- * Background service worker. Owns:
- *   - The vault (chrome.storage.local) via vault-store.ts
- *   - The Decider abstraction (Wire / Manual / LocalRpc) via decider.ts
- *   - The signing logic (sign.ts)
- *   - The chrome.runtime.onMessage handler that fields EIP-1193 requests
- *     from content scripts
+ * Background service worker core — variant-agnostic.
  *
- * v0.2: bootstraps a dev wallet on first install + routes signing
- * decisions through LocalRpcDecider. Path B smoke test works.
+ * Each extension variant (prod, ci) imports {@link installRequestHandler}
+ * and supplies its own {@link DeciderFactory}. The factory decides which
+ * concrete Decider to build for each wallet's configured `mode`
+ * (local-rpc / wire / manual). Core never imports Wire.
  */
 
-import type { SignRequest, WalletEntry, DeciderConfig } from "@agiterra/wallet-tools";
-import { makeDecider } from "./decider.js";
+import type { SignRequest, WalletEntry } from "@agiterra/wallet-tools";
+import type { DeciderFactory } from "./decider.js";
 import { signEip1193 } from "./sign.js";
 import {
   getVault,
@@ -20,8 +17,8 @@ import {
   devChainId,
 } from "./vault-store.js";
 
-// ----- Active wallet per tab -----
-
+// Active wallet per tab — explicit selection from agent (wallet_use).
+// Default when no selection: first wallet in vault.
 const tabActiveWallet = new Map<number, string>(); // tab_id → wallet address
 
 async function getActiveWallet(tabId: number | undefined): Promise<WalletEntry | null> {
@@ -34,10 +31,8 @@ async function getActiveWallet(tabId: number | undefined): Promise<WalletEntry |
       if (w) return w;
     }
   }
-  return wallets[0]; // default: first wallet in vault
+  return wallets[0];
 }
-
-// ----- EIP-1193 request handler -----
 
 interface IncomingRequest {
   type: "wallet/request";
@@ -47,23 +42,36 @@ interface IncomingRequest {
   tab_url: string;
 }
 
-chrome.runtime.onMessage.addListener(
-  (msg: IncomingRequest, sender, sendResponse) => {
-    if (msg.type !== "wallet/request") return false;
-    void handle(msg, sender)
-      .then(sendResponse)
-      .catch((e: Error & { code?: number }) => {
-        console.error("[wallet-vault] handler crashed:", e);
-        sendResponse({ error: { code: e.code ?? -32603, message: e.message ?? "Internal error" } });
-      });
-    return true; // async response
-  },
-);
+type SignResult = { result?: unknown; error?: { code: number; message: string; data?: unknown } };
+
+export function installRequestHandler(makeDecider: DeciderFactory): void {
+  chrome.runtime.onMessage.addListener(
+    (msg: IncomingRequest, sender, sendResponse) => {
+      if (msg.type !== "wallet/request") return false;
+      void handle(msg, sender, makeDecider)
+        .then(sendResponse)
+        .catch((e: Error & { code?: number }) => {
+          console.error("[wallet-vault] handler crashed:", e);
+          sendResponse({ error: { code: e.code ?? -32603, message: e.message ?? "Internal error" } });
+        });
+      return true; // async response
+    },
+  );
+
+  (async () => {
+    try {
+      await bootstrapDevWalletIfEmpty();
+    } catch (e) {
+      console.error("[wallet-vault] bootstrap failed:", e);
+    }
+  })();
+}
 
 async function handle(
   msg: IncomingRequest,
   sender: chrome.runtime.MessageSender,
-): Promise<{ result?: unknown; error?: { code: number; message: string; data?: unknown } }> {
+  makeDecider: DeciderFactory,
+): Promise<SignResult> {
   const wallet = await getActiveWallet(sender.tab?.id);
   const method = msg.request.method;
   const params = msg.request.params ?? [];
@@ -76,15 +84,14 @@ async function handle(
     return {
       error: {
         code: -32603,
-        message: "No wallets in vault. (v0.2: extension auto-bootstraps a dev wallet on first run; reload extension if missing.)",
+        message: "No wallets in vault. (Extension auto-bootstraps a dev wallet on first run; reload extension if missing.)",
       },
     };
   }
 
-  // Some methods don't need a decision (just return the active account)
+  // Methods that only need the active account, no signing decision:
   if (method === "eth_accounts") return { result: [wallet.address] };
 
-  // Methods that require a sign decision:
   const needsDecision = new Set([
     "eth_requestAccounts",
     "eth_sendTransaction",
@@ -108,8 +115,7 @@ async function handle(
       created_at: Date.now(),
     };
 
-    const config: DeciderConfig = wallet.decider ?? { mode: "local-rpc", url: "http://localhost:54321", auth_token: "dev-token-v0" };
-    const decider = makeDecider(config);
+    const decider = makeDecider(wallet.decider);
 
     console.log("[wallet-vault] dispatching sign request to decider:", signReq);
     let response;
@@ -124,12 +130,21 @@ async function handle(
 
     switch (response.action) {
       case "refuse":
-        return { error: { code: 4001, message: response.reason ?? "User rejected the request." } };
+        // EIP-1193 convention: code 4001 message is the literal sentinel
+        // "User rejected the request." The decider's reason rides in `data`
+        // so callers / tests can introspect it without scraping `message`.
+        return {
+          error: {
+            code: 4001,
+            message: "User rejected the request.",
+            data: response.reason ? { reason: response.reason } : undefined,
+          },
+        };
       case "reject_with_error":
         return { error: { code: response.code, message: response.message, data: response.data } };
       case "approve_with_override":
-        // v0.3: support overriding params before signing. v0.2 just rejects.
-        return { error: { code: -32603, message: "approve_with_override not yet implemented (v0.3)" } };
+        // TODO(v0.3+): apply override.params before signing. v0.2 rejects.
+        return { error: { code: -32603, message: "approve_with_override not yet implemented" } };
       case "approve": {
         try {
           const privateKeyHex = await unlockPrivateKey(wallet);
@@ -148,17 +163,7 @@ async function handle(
     }
   }
 
-  return { error: { code: -32601, message: `Method ${method} not supported by wallet-vault v0.2` } };
+  return { error: { code: -32601, message: `Method ${method} not supported by wallet-vault` } };
 }
 
-// ----- Boot -----
-
-(async () => {
-  try {
-    await bootstrapDevWalletIfEmpty();
-  } catch (e) {
-    console.error("[wallet-vault] bootstrap failed:", e);
-  }
-})();
-
-console.log("[wallet-vault] background service worker started, v0.2.0");
+export { tabActiveWallet };

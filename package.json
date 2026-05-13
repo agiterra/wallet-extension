@@ -1,14 +1,17 @@
 {
-  "name": "@agiterra/wallet-extension",
-  "version": "0.2.0",
-  "description": "Chrome extension for agent-driven dApp wallet interactions. Multi-wallet vault, Wire-mediated signing (with manual + local-RPC fallbacks), EIP-1193 surface.",
-  "type": "module",
+  "name": "@agiterra/wallet-extension-monorepo",
+  "version": "0.3.0-dev.0",
+  "private": true,
+  "description": "Workspace root for @agiterra/wallet-extension (prod, with Wire) and @agiterra/wallet-extension-ci (CI, no Wire). Shared core in packages/core.",
+  "workspaces": [
+    "packages/core",
+    "packages/prod",
+    "packages/ci"
+  ],
   "scripts": {
-    "build": "bun build src/background.ts --outfile=dist/background.js --target=browser --format=esm && bun build src/content-script.ts --outfile=dist/content-script.js --target=browser --format=iife && bun build src/inpage.ts --outfile=dist/inpage.js --target=browser --format=iife && cp manifest.json dist/manifest.json && cp -R icons dist/icons 2>/dev/null || true",
-    "watch": "bun build src/background.ts --outfile=dist/background.js --target=browser --format=esm --watch & bun build src/content-script.ts --outfile=dist/content-script.js --target=browser --format=iife --watch & bun build src/inpage.ts --outfile=dist/inpage.js --target=browser --format=iife --watch"
-  },
-  "dependencies": {
-    "@agiterra/wallet-tools": "agiterra/wallet-tools#v0.1.0"
+    "build": "bun --filter @agiterra/wallet-extension build && bun --filter @agiterra/wallet-extension-ci build",
+    "build:prod": "bun --filter @agiterra/wallet-extension build",
+    "build:ci": "bun --filter @agiterra/wallet-extension-ci build"
   },
   "devDependencies": {
     "@types/chrome": "^0.0.270",

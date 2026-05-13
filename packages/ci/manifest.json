@@ -1,0 +1,36 @@
+{
+  "manifest_version": 3,
+  "name": "Agiterra Wallet (CI)",
+  "version": "0.3.0",
+  "description": "CI build of Agiterra Wallet. No Wire — use a LocalRpcDecider in Playwright tests.",
+  "permissions": [
+    "storage",
+    "tabs"
+  ],
+  "host_permissions": [
+    "http://localhost/*",
+    "http://127.0.0.1/*"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content-script.js"],
+      "run_at": "document_start",
+      "world": "ISOLATED",
+      "all_frames": false
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["inpage.js"],
+      "matches": ["<all_urls>"]
+    }
+  ],
+  "action": {
+    "default_title": "Agiterra Wallet (CI)"
+  }
+}

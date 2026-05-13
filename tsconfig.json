@@ -10,6 +10,5 @@
     "allowImportingTsExtensions": true,
     "noEmit": true,
     "types": ["chrome", "bun-types"]
-  },
-  "include": ["src/**/*"]
+  }
 }

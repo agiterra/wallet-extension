@@ -16,7 +16,7 @@ const server = Bun.serve({
   async fetch(req) {
     const url = new URL(req.url);
     if (url.pathname === "/" || url.pathname === "/test-page.html") {
-      const file = Bun.file(`${import.meta.dir}/../test/test-page.html`);
+      const file = Bun.file(`${import.meta.dir}/../test-page.html`);
       return new Response(file, { headers: { "Content-Type": "text/html" } });
     }
     return new Response("not found", { status: 404 });

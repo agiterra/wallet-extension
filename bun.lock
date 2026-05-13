@@ -3,18 +3,44 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "@agiterra/wallet-extension",
-      "dependencies": {
-        "@agiterra/wallet-tools": "agiterra/wallet-tools#v0.1.0",
-      },
+      "name": "@agiterra/wallet-extension-monorepo",
       "devDependencies": {
         "@types/chrome": "^0.0.270",
         "bun-types": "latest",
         "typescript": "^6.0.3",
       },
     },
+    "packages/ci": {
+      "name": "@agiterra/wallet-extension-ci",
+      "version": "0.3.0-dev.0",
+      "dependencies": {
+        "@agiterra/wallet-extension-core": "workspace:*",
+        "@agiterra/wallet-tools": "agiterra/wallet-tools#v0.1.0",
+      },
+    },
+    "packages/core": {
+      "name": "@agiterra/wallet-extension-core",
+      "version": "0.3.0-dev.0",
+      "dependencies": {
+        "@agiterra/wallet-tools": "agiterra/wallet-tools#v0.1.0",
+      },
+    },
+    "packages/prod": {
+      "name": "@agiterra/wallet-extension",
+      "version": "0.3.0-dev.0",
+      "dependencies": {
+        "@agiterra/wallet-extension-core": "workspace:*",
+        "@agiterra/wallet-tools": "agiterra/wallet-tools#v0.1.0",
+      },
+    },
   },
   "packages": {
+    "@agiterra/wallet-extension": ["@agiterra/wallet-extension@workspace:packages/prod"],
+
+    "@agiterra/wallet-extension-ci": ["@agiterra/wallet-extension-ci@workspace:packages/ci"],
+
+    "@agiterra/wallet-extension-core": ["@agiterra/wallet-extension-core@workspace:packages/core"],
+
     "@agiterra/wallet-tools": ["@agiterra/wallet-tools@github:agiterra/wallet-tools#3cadba0", { "dependencies": { "@agiterra/wire-tools": "agiterra/wire-tools#v2.3.5", "@noble/curves": "^1.6.0", "@noble/hashes": "^1.5.0" } }, "agiterra-wallet-tools-3cadba0", "sha512-4B+yd+Yous4NvTFc2C5C2S+3VSmrpRjns5PutA5hSo5o06SQklixW9YaKHqRbJF/jWVmfA5YVnSir2vXZdMcjQ=="],
 
     "@agiterra/wire-tools": ["@agiterra/wire-tools@github:agiterra/wire-tools#1f5ff65", { "dependencies": { "@modelcontextprotocol/sdk": "^1.29.0", "pino": "^10.3.1" } }, "agiterra-wire-tools-1f5ff65", "sha512-0bLptUllC3Zj5YX+RzXSRvRz8IdFSJpjGVaurAxvCrUJ2csinqevMqR7Zej8IjBzTLBirZYtCIxGih2DKXPbcw=="],

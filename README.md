@@ -27,35 +27,49 @@ Key properties:
 - **v0.1.0** — scaffolding (manifest, three bundles, bridge plumbed, Decider stubbed).
 - **v0.2.0** — Path B end-to-end signing. LocalRpcDecider works.
   personal_sign works. Auto-bootstraps a dev wallet on first install.
-- **v0.3** (next) — WireDecider, user-facing UI (options page, key
-  export), `eth_signTransaction` with RLP/EIP-1559, ManualDecider popup.
+- **v0.3** (in progress) — Bun-workspace split (core / prod / ci),
+  WireDecider, user-facing UI (options page, key export),
+  `eth_signTransaction` with RLP/EIP-1559, ManualDecider popup.
+
+## Workspace layout
+
+```
+wallet-extension/
+  packages/
+    core/   @agiterra/wallet-extension-core  (vault, sign, EIP-1193, LocalRpc + Manual deciders — no wire)
+    prod/   @agiterra/wallet-extension        (entry; supplies WireDecider; depends on wire-tools)
+    ci/     @agiterra/wallet-extension-ci     (entry; same surface, NO wire — Playwright path)
+```
+
+`prod` and `ci` produce identical bundle shapes (background.js, content-script.js, inpage.js, manifest.json) into their own `dist/`. The boundary is real: `packages/ci/package.json` cannot import any wire module — a wallet configured with `mode:"wire"` in the CI build throws at decide-time.
 
 ## Build
 
 ```bash
 bun install
-bun run build
+bun run build            # builds both prod and ci
+bun run build:prod       # prod variant only
+bun run build:ci         # ci variant only
 ```
 
-Outputs `dist/manifest.json` + three bundles (`background.js`,
-`content-script.js`, `inpage.js`).
+Outputs go to `packages/prod/dist/` and `packages/ci/dist/`. Each contains `manifest.json` + three bundles.
 
-For active development:
+For active development of the prod variant:
 
 ```bash
-bun run watch  # rebuilds on src/ changes; refresh extension in chrome://extensions
+cd packages/prod && bun run watch
 ```
 
-## Path B smoke test (v0.2.0)
+## Path B smoke test (v0.3 / prod build)
 
 End-to-end manual test: load extension → start local-decider server →
 visit test page → see a real `personal_sign` signature come back.
 
-1. **Build the extension:**
+1. **Build the prod variant:**
 
    ```bash
    bun install
-   bun run build
+   bun run build:prod
    ```
 
 2. **Load it into Chrome:**
@@ -63,7 +77,7 @@ visit test page → see a real `personal_sign` signature come back.
    - Open `chrome://extensions`
    - Enable Developer mode (top right)
    - Click "Load unpacked"
-   - Select the `dist/` directory of this repo
+   - Select the `packages/prod/dist/` directory of this repo
 
 3. **Inspect the service worker** to confirm the dev wallet bootstrapped:
 
@@ -72,27 +86,26 @@ visit test page → see a real `personal_sign` signature come back.
      ```
      [wallet-vault] bootstrap: created dev wallet 0x...
      [wallet-vault] dev decider: http://localhost:54321
-     [wallet-vault] start the local decider with: bun scripts/local-decider-server.ts
-     [wallet-vault] background service worker started, v0.2.0
+     [wallet-vault] background service worker started, prod variant, v0.3.0-dev
      ```
    - Copy the wallet address; you'll see it again in step 6.
 
 4. **Start the local decider:**
 
    ```bash
-   bun scripts/local-decider-server.ts
+   bun packages/ci/scripts/local-decider-server.ts
    ```
 
    Default approve-all. Set `REFUSE=1` to test the 4001 refusal flow:
 
    ```bash
-   REFUSE=1 bun scripts/local-decider-server.ts
+   REFUSE=1 bun packages/ci/scripts/local-decider-server.ts
    ```
 
 5. **Start the test-page server:**
 
    ```bash
-   bun scripts/test-page-server.ts
+   bun packages/ci/scripts/test-page-server.ts
    ```
 
    In another terminal so both stay running.
