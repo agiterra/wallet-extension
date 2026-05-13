@@ -14,6 +14,7 @@
 import { personalSign, signDigest } from "@agiterra/wallet-tools";
 import { keccak_256 } from "@noble/hashes/sha3";
 import { rlpEncode, toRlpBytes, bytesToHex, hexToBytes } from "./rlp.js";
+import { computeEip712Digest, parseTypedData } from "./eip712.js";
 import {
   estimateGas,
   getBlock,
@@ -97,13 +98,22 @@ export async function signEip1193(
       }
     }
 
-    case "eth_signTypedData_v4":
-      return {
-        error: {
-          code: -32601,
-          message: "eth_signTypedData_v4 not yet implemented (EIP-712 hashing lands separately)",
-        },
-      };
+    case "eth_signTypedData_v4": {
+      // params: [address, typedDataJsonOrObject]
+      // (Some dApps swap the order; detect by 0x-prefix.)
+      const [a, b] = params as [unknown, unknown];
+      const isAddr = (v: unknown) => typeof v === "string" && /^0x[0-9a-fA-F]{40}$/.test(v);
+      const tdInput = isAddr(a) ? b : a;
+      try {
+        const typed = parseTypedData(tdInput as string);
+        const digestHex = computeEip712Digest(typed);
+        const sig = signDigest(digestHex, ctx.privateKeyHex);
+        // EIP-1193 returns 65-byte serialized signature (v=27|28, like personal_sign).
+        return { result: sig.serialized };
+      } catch (e) {
+        return { error: { code: -32603, message: `eth_signTypedData_v4 failed: ${(e as Error).message}` } };
+      }
+    }
 
     default:
       return { error: { code: -32601, message: `Method ${method} not supported` } };
