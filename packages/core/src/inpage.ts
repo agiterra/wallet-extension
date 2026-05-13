@@ -84,11 +84,14 @@ window.addEventListener("message", (event: MessageEvent) => {
 
 const provider = new AgiterraEthereumProvider();
 
-// EIP-6963 multi-wallet discovery announcement
+// EIP-6963 multi-wallet discovery announcement.
+// The UUID is a stable identifier for this wallet (per EIP-6963 — must NOT
+// regenerate per page-load; dApps use it to dedupe across reloads).
+import { AGITERRA_WALLET_ICON_DATA_URI } from "./icon-data-uri.js";
 const eip6963Info = {
-  uuid: "agiterra-wallet-" + crypto.randomUUID(),
+  uuid: "474cd34c-8091-4ce8-9560-ea19b312c6fc",
   name: "Agiterra Wallet",
-  icon: "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI0IiBoZWlnaHQ9IjQiPjwvc3ZnPg==",
+  icon: AGITERRA_WALLET_ICON_DATA_URI,
   rdns: "land.agiterra.wallet",
 };
 
