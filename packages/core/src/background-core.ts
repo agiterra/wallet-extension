@@ -148,7 +148,7 @@ async function handle(
       case "approve": {
         try {
           const privateKeyHex = await unlockPrivateKey(wallet);
-          const signed = signEip1193(method, params, {
+          const signed = await signEip1193(method, params, {
             privateKeyHex,
             address: wallet.address,
             chainId: devChainId(),

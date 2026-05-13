@@ -11,8 +11,12 @@
     "./background-core": "./src/background-core.ts"
   },
   "dependencies": {
-    "@agiterra/wallet-tools": "agiterra/wallet-tools#v0.1.0"
+    "@agiterra/wallet-tools": "agiterra/wallet-tools#v0.1.0",
+    "@noble/hashes": "^1.6.0"
   },
   "license": "MIT",
-  "author": "Tim Garthwaite <https://github.com/mividtim>"
+  "author": "Tim Garthwaite <https://github.com/mividtim>",
+  "devDependencies": {
+    "ethers": "^6.16.0"
+  }
 }
