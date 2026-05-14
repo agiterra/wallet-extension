@@ -1,6 +1,6 @@
 {
   "name": "@agiterra/wallet-extension-ci",
-  "version": "0.3.0-dev.0",
+  "version": "0.4.0-dev.0",
   "description": "CI variant of the Agiterra Wallet extension. Identical surface to @agiterra/wallet-extension but with NO Wire dependency. Wallets configured with mode:\"wire\" will throw at decision time. Use mode:\"local-rpc\" for Playwright-driven tests.",
   "type": "module",
   "scripts": {
@@ -8,7 +8,7 @@
   },
   "dependencies": {
     "@agiterra/wallet-extension-core": "workspace:*",
-    "@agiterra/wallet-tools": "agiterra/wallet-tools#v0.1.0"
+    "@agiterra/wallet-tools": "agiterra/wallet-tools#v0.2.0"
   },
   "license": "MIT",
   "author": "Tim Garthwaite <https://github.com/mividtim>"

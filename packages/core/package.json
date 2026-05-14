@@ -1,6 +1,6 @@
 {
   "name": "@agiterra/wallet-extension-core",
-  "version": "0.3.0-dev.0",
+  "version": "0.4.0-dev.0",
   "description": "Shared core for @agiterra/wallet-extension and @agiterra/wallet-extension-ci. Vault, signing, EIP-1193 bridge, LocalRpcDecider, ManualDecider. NO Wire dep — wire-mediated signing lives in @agiterra/wallet-extension (prod).",
   "type": "module",
   "main": "./src/index.ts",
@@ -11,7 +11,7 @@
     "./background-core": "./src/background-core.ts"
   },
   "dependencies": {
-    "@agiterra/wallet-tools": "agiterra/wallet-tools#v0.1.0",
+    "@agiterra/wallet-tools": "agiterra/wallet-tools#v0.2.0",
     "@noble/hashes": "^1.6.0"
   },
   "license": "MIT",

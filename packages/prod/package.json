@@ -1,6 +1,6 @@
 {
   "name": "@agiterra/wallet-extension",
-  "version": "0.3.0-dev.0",
+  "version": "0.4.0-dev.0",
   "description": "Chrome extension for agent-driven dApp wallet interactions. Multi-wallet vault, Wire-mediated signing (with manual + local-RPC fallbacks), EIP-1193 surface.",
   "type": "module",
   "scripts": {
@@ -9,7 +9,7 @@
   },
   "dependencies": {
     "@agiterra/wallet-extension-core": "workspace:*",
-    "@agiterra/wallet-tools": "agiterra/wallet-tools#v0.1.0"
+    "@agiterra/wallet-tools": "agiterra/wallet-tools#v0.2.0"
   },
   "license": "MIT",
   "author": "Tim Garthwaite <https://github.com/mividtim>"

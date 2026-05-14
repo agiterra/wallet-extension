@@ -66,6 +66,27 @@ export class WireConnection {
   }
 
   /**
+   * Write a value into Wire's plugin_settings KV. Auth: this extension's
+   * JWT is accepted when the URL namespace matches the extension's agent
+   * ID (i.e. the wallet-vault integration writes the "wallet-vault"
+   * namespace). Used for boot-time seeding of the wallet directory and
+   * for vault mutations (create/rename) triggered by MCP tools.
+   */
+  async setPluginSetting(namespace: string, key: string, value: unknown): Promise<void> {
+    if (!this.wireUrl) throw new Error("Wire URL not configured");
+    const body = JSON.stringify({ value });
+    const headers = await this.jwtHeaders(body);
+    const res = await fetch(`${this.wireUrl}/plugin_settings/${namespace}/${key}`, {
+      method: "PUT",
+      headers,
+      body,
+    });
+    if (!res.ok) {
+      throw new Error(`plugin_settings PUT failed (${res.status}): ${await res.text().catch(() => "")}`);
+    }
+  }
+
+  /**
    * Publish a JWT-signed message to a topic. `dest` (optional) sends it
    * directly to a single agent; omitted = broadcast.
    */
