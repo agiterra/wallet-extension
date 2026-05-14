@@ -84,7 +84,17 @@ const DECIDER_TARGET_KEY = "agiterra-wallet-extension-decider-target";
     }
   }
 
-  installRequestHandler(makeDecider);
+  // Resolver: which wallet address is bound to a given tab? Uses TabClaims
+  // (persistent across SW reloads via chrome.storage.local), set by agents
+  // calling wallet_use({tab_id, wallet}). Returns null when no claim — the
+  // core falls back to the first vault wallet so operator-driven clicks
+  // still work without an explicit claim.
+  const tabResolver = async (tabId: string | undefined): Promise<string | null> => {
+    const claim = await tabClaims.getClaimByTab(tabId ?? null);
+    return claim?.wallet_address ?? null;
+  };
+
+  installRequestHandler(makeDecider, tabResolver);
   console.log(`[wallet-vault] background service worker started, prod variant, v0.4.0-dev (identity: ${identity.agentId})`);
 })().catch((e: Error) => {
   console.error("[wallet-vault] boot failed:", e);

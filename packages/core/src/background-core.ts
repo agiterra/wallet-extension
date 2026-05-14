@@ -17,13 +17,34 @@ import {
   devChainId,
 } from "./vault-store.js";
 
-// Active wallet per tab — explicit selection from agent (wallet_use).
-// Default when no selection: first wallet in vault.
+/**
+ * Resolve which wallet address is bound to a given browser tab.
+ * Implemented by the prod entry against TabClaims (Wire plugin_settings
+ * source of truth); CI entry passes null to fall back to the in-memory
+ * map / first-wallet default.
+ */
+export type TabWalletResolver = (tabId: string | undefined) => Promise<string | null>;
+
+// Legacy in-memory fallback for ci variant / pre-claim flows.
 const tabActiveWallet = new Map<number, string>(); // tab_id → wallet address
 
-async function getActiveWallet(tabId: number | undefined): Promise<WalletEntry | null> {
+async function getActiveWallet(
+  tabId: number | undefined,
+  tabResolver: TabWalletResolver | null,
+): Promise<WalletEntry | null> {
   const wallets = await getVault();
   if (wallets.length === 0) return null;
+
+  // Prefer the persistent tab-claim resolver (prod path).
+  if (tabResolver) {
+    const claimedAddress = await tabResolver(tabId != null ? String(tabId) : undefined);
+    if (claimedAddress) {
+      const w = wallets.find((x) => x.address.toLowerCase() === claimedAddress.toLowerCase());
+      if (w) return w;
+    }
+  }
+
+  // Legacy in-memory fallback.
   if (tabId != null) {
     const explicit = tabActiveWallet.get(tabId);
     if (explicit) {
@@ -44,11 +65,14 @@ interface IncomingRequest {
 
 type SignResult = { result?: unknown; error?: { code: number; message: string; data?: unknown } };
 
-export function installRequestHandler(makeDecider: DeciderFactory): void {
+export function installRequestHandler(
+  makeDecider: DeciderFactory,
+  tabResolver: TabWalletResolver | null = null,
+): void {
   chrome.runtime.onMessage.addListener(
     (msg: IncomingRequest, sender, sendResponse) => {
       if (msg.type !== "wallet/request") return false;
-      void handle(msg, sender, makeDecider)
+      void handle(msg, sender, makeDecider, tabResolver)
         .then(sendResponse)
         .catch((e: Error & { code?: number }) => {
           console.error("[wallet-vault] handler crashed:", e);
@@ -71,8 +95,9 @@ async function handle(
   msg: IncomingRequest,
   sender: chrome.runtime.MessageSender,
   makeDecider: DeciderFactory,
+  tabResolver: TabWalletResolver | null,
 ): Promise<SignResult> {
-  const wallet = await getActiveWallet(sender.tab?.id);
+  const wallet = await getActiveWallet(sender.tab?.id, tabResolver);
   const method = msg.request.method;
   const params = msg.request.params ?? [];
 
@@ -89,11 +114,16 @@ async function handle(
     };
   }
 
-  // Methods that only need the active account, no signing decision:
-  if (method === "eth_accounts") return { result: [wallet.address] };
+  // Account-introspection methods return the tab's bound wallet directly —
+  // these are reads, not signs, and going through the decider adds an
+  // agent-loop latency floor of 5-25s that makes the wallet picker feel
+  // hung. The agent already authorized the wallet by claiming the tab
+  // (or the operator picked the default); no per-call decision needed.
+  if (method === "eth_accounts" || method === "eth_requestAccounts") {
+    return { result: [wallet.address] };
+  }
 
   const needsDecision = new Set([
-    "eth_requestAccounts",
     "eth_sendTransaction",
     "eth_signTransaction",
     "personal_sign",
