@@ -27,6 +27,17 @@ interface JsonRpcResponse {
   error?: { code: number; message: string; data?: unknown };
 }
 
+/**
+ * Persist a per-chain RPC URL. Used by wallet_addEthereumChain when a dApp
+ * proposes a new chain config.
+ */
+export async function setRpcUrl(chainId: number, url: string): Promise<void> {
+  const stored = await chrome.storage.local.get(RPC_URLS_KEY);
+  const map = (stored[RPC_URLS_KEY] as Record<string, string> | undefined) ?? {};
+  map[String(chainId)] = url;
+  await chrome.storage.local.set({ [RPC_URLS_KEY]: map });
+}
+
 export async function getRpcUrl(chainId: number): Promise<string> {
   const stored = await chrome.storage.local.get(RPC_URLS_KEY);
   const map = (stored[RPC_URLS_KEY] as Record<string, string> | undefined) ?? {};

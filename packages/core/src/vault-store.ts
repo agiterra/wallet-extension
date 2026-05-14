@@ -83,3 +83,24 @@ export async function bootstrapDevWalletIfEmpty(): Promise<WalletEntry | null> {
 export function devChainId(): number {
   return DEV_CHAIN_ID;
 }
+
+const ACTIVE_CHAIN_KEY = "agiterra-wallet-active-chain-id";
+
+/**
+ * Read the currently active chain ID. Set by wallet_switchEthereumChain.
+ * Falls back to DEV_CHAIN_ID on first install.
+ */
+export async function getActiveChainId(): Promise<number> {
+  const stored = await chrome.storage.local.get(ACTIVE_CHAIN_KEY);
+  const v = stored[ACTIVE_CHAIN_KEY];
+  if (typeof v === "number" && Number.isFinite(v)) return v;
+  if (typeof v === "string") {
+    const n = v.startsWith("0x") ? parseInt(v, 16) : Number(v);
+    if (Number.isFinite(n)) return n;
+  }
+  return DEV_CHAIN_ID;
+}
+
+export async function setActiveChainId(chainId: number): Promise<void> {
+  await chrome.storage.local.set({ [ACTIVE_CHAIN_KEY]: chainId });
+}

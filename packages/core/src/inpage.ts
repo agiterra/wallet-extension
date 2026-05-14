@@ -41,9 +41,13 @@ function genId(): string {
   return crypto.randomUUID();
 }
 
+type EventHandler = (...args: unknown[]) => void;
+
 class AgiterraEthereumProvider {
   readonly isMetaMask = false; // Don't impersonate
   readonly isAgiterraWallet = true;
+
+  private listeners = new Map<string, Set<EventHandler>>();
 
   async request(req: Eip1193Request): Promise<unknown> {
     const request_id = genId();
@@ -58,27 +62,68 @@ class AgiterraEthereumProvider {
     });
   }
 
-  // EIP-1193 event emitter stubs. v0.1.0 doesn't emit events; v0.2
-  // wires accountsChanged / chainChanged when the agent calls
-  // wallet_use() or wallet_switch_chain.
-  on(_event: string, _handler: (...args: unknown[]) => void): this { return this; }
-  removeListener(_event: string, _handler: (...args: unknown[]) => void): this { return this; }
+  // EIP-1193 event emitter. Supports `chainChanged`, `accountsChanged`,
+  // `connect`, `disconnect`, `message`. Events fired by the SW via
+  // content-script forwarding (see WalletEventBridgeMessage below).
+  on(event: string, handler: EventHandler): this {
+    let set = this.listeners.get(event);
+    if (!set) { set = new Set(); this.listeners.set(event, set); }
+    set.add(handler);
+    return this;
+  }
+  removeListener(event: string, handler: EventHandler): this {
+    this.listeners.get(event)?.delete(handler);
+    return this;
+  }
+  addListener(event: string, handler: EventHandler): this {
+    return this.on(event, handler);
+  }
+  off(event: string, handler: EventHandler): this {
+    return this.removeListener(event, handler);
+  }
+
+  _emit(event: string, ...args: unknown[]): void {
+    const set = this.listeners.get(event);
+    if (!set) return;
+    for (const h of set) {
+      try { h(...args); } catch (e) {
+        console.error(`[agiterra-wallet] listener for '${event}' threw:`, e);
+      }
+    }
+  }
+}
+
+interface WalletEventBridgeMessage {
+  source: "agiterra-wallet-content-event";
+  event: string;
+  data: unknown;
 }
 
 window.addEventListener("message", (event: MessageEvent) => {
   if (event.source !== window) return;
-  const data = event.data as BridgeResponse | undefined;
-  if (!data || data.source !== "agiterra-wallet-content") return;
-  const handler = pending.get(data.request_id);
+  const data = event.data as BridgeResponse | WalletEventBridgeMessage | undefined;
+  if (!data) return;
+
+  // EIP-1193 event from the SW (chainChanged, accountsChanged, etc.)
+  if ((data as WalletEventBridgeMessage).source === "agiterra-wallet-content-event") {
+    const ev = data as WalletEventBridgeMessage;
+    provider._emit(ev.event, ev.data);
+    return;
+  }
+
+  // Standard request/response bridge.
+  const resp = data as BridgeResponse;
+  if (resp.source !== "agiterra-wallet-content") return;
+  const handler = pending.get(resp.request_id);
   if (!handler) return;
-  pending.delete(data.request_id);
-  if (data.error) {
-    const e = new Error(data.error.message);
-    (e as Error & { code: number; data?: unknown }).code = data.error.code;
-    (e as Error & { code: number; data?: unknown }).data = data.error.data;
+  pending.delete(resp.request_id);
+  if (resp.error) {
+    const e = new Error(resp.error.message);
+    (e as Error & { code: number; data?: unknown }).code = resp.error.code;
+    (e as Error & { code: number; data?: unknown }).data = resp.error.data;
     handler.reject(e);
   } else {
-    handler.resolve(data.result);
+    handler.resolve(resp.result);
   }
 });
 

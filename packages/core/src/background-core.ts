@@ -14,8 +14,10 @@ import {
   getVault,
   unlockPrivateKey,
   bootstrapDevWalletIfEmpty,
-  devChainId,
+  getActiveChainId,
+  setActiveChainId,
 } from "./vault-store.js";
+import { setRpcUrl } from "./rpc.js";
 
 /**
  * Resolve which wallet address is bound to a given browser tab.
@@ -100,10 +102,50 @@ async function handle(
   const wallet = await getActiveWallet(sender.tab?.id, tabResolver);
   const method = msg.request.method;
   const params = msg.request.params ?? [];
+  const activeChain = await getActiveChainId();
 
   // Read-only methods that don't need a decider:
-  if (method === "eth_chainId") return { result: "0x" + devChainId().toString(16) };
-  if (method === "net_version") return { result: String(devChainId()) };
+  if (method === "eth_chainId") return { result: "0x" + activeChain.toString(16) };
+  if (method === "net_version") return { result: String(activeChain) };
+
+  // Permission-introspection methods. Per EIP-2255, return capabilities for
+  // accounts. We auto-approve since the tab claim / operator default is
+  // already the consent surface.
+  if (method === "wallet_getPermissions" || method === "wallet_requestPermissions") {
+    return { result: [{ parentCapability: "eth_accounts", caveats: [] }] };
+  }
+
+  // Chain management. Per EIP-3326 / EIP-3085: success returns null. After
+  // updating active chain we fire chainChanged so the dApp re-reads state.
+  if (method === "wallet_switchEthereumChain") {
+    const arg = (params[0] ?? {}) as { chainId?: string };
+    if (!arg.chainId) return { error: { code: -32602, message: "wallet_switchEthereumChain: missing chainId param" } };
+    let id: number;
+    try { id = parseChainIdParam(arg.chainId); } catch (e) {
+      return { error: { code: -32602, message: (e as Error).message } };
+    }
+    await setActiveChainId(id);
+    broadcastWalletEvent("chainChanged", "0x" + id.toString(16));
+    return { result: null };
+  }
+  if (method === "wallet_addEthereumChain") {
+    // EIP-3085: { chainId, chainName, nativeCurrency, rpcUrls, blockExplorerUrls? }
+    const arg = (params[0] ?? {}) as { chainId?: string; rpcUrls?: string[] };
+    if (!arg.chainId) return { error: { code: -32602, message: "wallet_addEthereumChain: missing chainId param" } };
+    let id: number;
+    try { id = parseChainIdParam(arg.chainId); } catch (e) {
+      return { error: { code: -32602, message: (e as Error).message } };
+    }
+    const rpcUrl = (arg.rpcUrls ?? []).find((u) => typeof u === "string" && /^https?:\/\//.test(u));
+    if (rpcUrl) {
+      try { await setRpcUrl(id, rpcUrl); } catch (e) {
+        console.warn(`[wallet-vault] wallet_addEthereumChain: failed to persist RPC URL: ${(e as Error).message}`);
+      }
+    }
+    // Per spec, returning null doesn't auto-switch. dApps usually follow
+    // up with wallet_switchEthereumChain if they want active.
+    return { result: null };
+  }
 
   if (!wallet) {
     return {
@@ -139,7 +181,7 @@ async function handle(
       wallet_name: wallet.name,
       tab_id: String(sender.tab?.id ?? ""),
       origin: msg.origin,
-      chain_id: devChainId(),
+      chain_id: activeChain,
       method,
       params,
       created_at: Date.now(),
@@ -178,10 +220,11 @@ async function handle(
       case "approve": {
         try {
           const privateKeyHex = await unlockPrivateKey(wallet);
+          const signedChain = await getActiveChainId();
           const signed = await signEip1193(method, params, {
             privateKeyHex,
             address: wallet.address,
-            chainId: devChainId(),
+            chainId: signedChain,
           });
           return signed;
         } catch (e) {
@@ -197,3 +240,32 @@ async function handle(
 }
 
 export { tabActiveWallet };
+
+/**
+ * Parse a chainId param from EIP-3085/3326 dApp callers. The spec says hex
+ * 0x-prefixed but some dApps send decimal — accept both.
+ */
+function parseChainIdParam(s: string): number {
+  const n = /^0x/i.test(s) ? parseInt(s, 16) : Number(s);
+  if (!Number.isFinite(n) || n <= 0) throw new Error(`invalid chainId '${s}'`);
+  return n;
+}
+
+/**
+ * Broadcast an EIP-1193 event to every open tab. Content scripts forward
+ * to inpage; inpage emits to dApp listeners. Used for chainChanged and
+ * accountsChanged.
+ */
+function broadcastWalletEvent(name: string, data: unknown): void {
+  if (typeof chrome === "undefined" || !chrome.tabs?.query) return;
+  void chrome.tabs.query({}, (tabs) => {
+    for (const tab of tabs) {
+      if (tab.id == null) continue;
+      void chrome.tabs.sendMessage(tab.id, {
+        type: "wallet/event",
+        event: name,
+        data,
+      }).catch(() => { /* tabs without our content script ignore this */ });
+    }
+  });
+}

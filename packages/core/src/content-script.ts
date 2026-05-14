@@ -30,6 +30,24 @@ interface BridgeResponse {
   error?: { code: number; message: string; data?: unknown };
 }
 
+// EIP-1193 event forwarding: SW broadcasts `wallet/event` messages to all
+// tabs when chain or accounts change. Content script forwards them into the
+// page so inpage's provider can fire registered listeners (chainChanged,
+// accountsChanged, etc.).
+interface WalletEventMessage {
+  type: "wallet/event";
+  event: string;
+  data: unknown;
+}
+chrome.runtime.onMessage.addListener((msg: WalletEventMessage) => {
+  if (msg?.type !== "wallet/event") return false;
+  window.postMessage(
+    { source: "agiterra-wallet-content-event", event: msg.event, data: msg.data },
+    window.location.origin,
+  );
+  return false;
+});
+
 window.addEventListener("message", async (event: MessageEvent) => {
   if (event.source !== window) return;
   const msg = event.data as BridgeMessage | undefined;
