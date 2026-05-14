@@ -15,7 +15,14 @@
  */
 
 import { importPrivateKey, derivePublicKeyB64 } from "./wire-crypto.js";
-import { getVault } from "@agiterra/wallet-extension-core";
+import {
+  getVault,
+  getPassphrase,
+  setPassphrase,
+  isDevPassphrase,
+  devPassphrase,
+  migrateVaultPassphrase,
+} from "@agiterra/wallet-extension-core";
 
 const WIRE_URL_KEY = "agiterra-wallet-extension-wire-url";
 const DECIDER_TARGET_KEY = "agiterra-wallet-extension-decider-target";
@@ -230,10 +237,65 @@ async function renderWallets(): Promise<void> {
   }).join("");
 }
 
+// ---- Vault passphrase section ----
+
+async function renderPassphraseStatus(): Promise<void> {
+  const statusEl = $("passphrase-status");
+  const current = await getPassphrase();
+  const vault = await getVault();
+  if (vault.length === 0) {
+    statusEl.innerHTML = '<span class="pill pill-warn">no wallets yet — set a passphrase before creating any</span>';
+    return;
+  }
+  if (isDevPassphrase(current)) {
+    statusEl.innerHTML = '<span class="pill pill-err">testnet default passphrase — set a real one before holding funds</span>';
+  } else {
+    statusEl.innerHTML = '<span class="pill pill-ok">unlocked (custom passphrase)</span>';
+  }
+}
+
+$("set-passphrase").addEventListener("click", async () => {
+  const input = $("passphrase-input") as HTMLInputElement;
+  const newPass = input.value;
+  if (!newPass || newPass.length < 8) {
+    alert("Passphrase must be at least 8 characters.");
+    return;
+  }
+  const current = await getPassphrase();
+  const vault = await getVault();
+
+  try {
+    if (vault.length > 0 && current !== newPass) {
+      // Migration: re-encrypt every wallet from the current passphrase
+      // (typically the testnet default) under the new one.
+      const result = await migrateVaultPassphrase(current, newPass);
+      console.log(`[wallet-vault] migrated ${result.migrated} wallets to new passphrase`);
+    }
+    await setPassphrase(newPass);
+    input.value = "";
+    toast("passphrase-toast");
+    await renderPassphraseStatus();
+  } catch (e) {
+    alert(`Failed: ${(e as Error).message}\n\nIf the old vault was encrypted under a different passphrase than the testnet default, this migration won't work — you'll need to recover by importing wallets manually.`);
+  }
+});
+
+// On Options page load, if vault is on dev passphrase, surface the call to action
+// but do NOT auto-migrate (operator must set their own passphrase first).
+void (async () => {
+  const current = await getPassphrase();
+  if (isDevPassphrase(current)) {
+    // No-op; just keep the dev passphrase in session for now so existing
+    // flows keep working. Operator sets a real passphrase via the section.
+    void devPassphrase; // referenced
+  }
+})();
+
 // ---- Boot ----
 
 void (async () => {
   await renderWireSection();
+  await renderPassphraseStatus();
   await renderNetworks();
   await renderWallets();
 })();

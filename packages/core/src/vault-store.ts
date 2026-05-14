@@ -41,6 +41,46 @@ export async function setPassphrase(passphrase: string): Promise<void> {
   await chrome.storage.session.set({ [PASSPHRASE_KEY]: passphrase });
 }
 
+/** Is this the hardcoded dev passphrase (testnet-only)? */
+export function isDevPassphrase(passphrase: string): boolean {
+  return passphrase === DEV_PASSPHRASE;
+}
+
+/** The dev passphrase constant — exposed only for migration probes. */
+export function devPassphrase(): string {
+  return DEV_PASSPHRASE;
+}
+
+/**
+ * Migrate every WalletEntry's encrypted_key from `oldPassphrase` to
+ * `newPassphrase`. Used when the operator sets a real passphrase for the
+ * first time (replaces the testnet-default "dev-passphrase-v0").
+ *
+ * Atomicity: builds the new vault array, only commits if every entry
+ * decrypted+re-encrypted successfully. Partial-failure means original
+ * vault is untouched and the caller surfaces the error.
+ */
+export async function migrateVaultPassphrase(
+  oldPassphrase: string,
+  newPassphrase: string,
+): Promise<{ migrated: number }> {
+  const { decryptPrivateKey, encryptPrivateKey } = await import("@agiterra/wallet-tools");
+  const vault = await getVault();
+  const migrated: WalletEntry[] = [];
+  for (const w of vault) {
+    let pkHex: string;
+    try {
+      pkHex = await decryptPrivateKey(w.encrypted_key, oldPassphrase);
+    } catch (e) {
+      throw new Error(`failed to decrypt wallet '${w.name}' (${w.address}) under old passphrase: ${(e as Error).message}`);
+    }
+    const newEncrypted = await encryptPrivateKey(pkHex, newPassphrase);
+    migrated.push({ ...w, encrypted_key: newEncrypted });
+  }
+  await setVault(migrated);
+  return { migrated: migrated.length };
+}
+
 /** Decrypt a wallet's private key for one signing operation. */
 export async function unlockPrivateKey(entry: WalletEntry): Promise<string> {
   const passphrase = await getPassphrase();

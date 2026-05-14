@@ -11,6 +11,9 @@ export {
   devChainId,
   getActiveChainId,
   setActiveChainId,
+  isDevPassphrase,
+  devPassphrase,
+  migrateVaultPassphrase,
 } from "./vault-store.js";
 export { signEip1193 } from "./sign.js";
 export type { SigningContext, SigningResult } from "./sign.js";

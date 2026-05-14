@@ -141,6 +141,21 @@
   </div>
   <div class="hint">When set, EIP-1193 sign requests on tabs that haven't been bound via <code>wallet_use</code> route to this agent ID. With proper wallet_use claims this becomes unnecessary.</div>
 
+  <h2>Vault Passphrase</h2>
+  <div class="row">
+    <label>Status</label>
+    <span id="passphrase-status"><span class="pill pill-warn">checking…</span></span>
+  </div>
+  <div class="row">
+    <label>Set / Unlock</label>
+    <input type="password" id="passphrase-input" placeholder="Vault passphrase" autocomplete="off">
+    <button id="set-passphrase">Set</button>
+    <span class="saved-toast" id="passphrase-toast">ok</span>
+  </div>
+  <div class="hint">
+    Vault private keys are AES-GCM encrypted under this passphrase. On first set, any existing wallets are migrated from the testnet-default passphrase to yours. The passphrase lives in <code>chrome.storage.session</code> only — cleared on browser restart, never on disk. Required before holding any real funds.
+  </div>
+
   <h2>Networks</h2>
   <table id="networks-table">
     <thead>
