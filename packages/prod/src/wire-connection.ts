@@ -73,6 +73,10 @@ export class WireConnection {
    * for vault mutations (create/rename) triggered by MCP tools.
    */
   async setPluginSetting(namespace: string, key: string, value: unknown): Promise<void> {
+    // The loop sets this.wireUrl lazily after first storage read. Callers may
+    // race in before the loop has gotten that far — pull from storage on demand
+    // so we don't throw spuriously on the first boot.
+    if (!this.wireUrl) await this.resolveWireUrl();
     if (!this.wireUrl) throw new Error("Wire URL not configured");
     const body = JSON.stringify({ value });
     const headers = await this.jwtHeaders(body);
