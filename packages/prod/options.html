@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Agiterra Wallet — Options</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      background: #0a0a0a;
+      color: #e5e5e5;
+      font-family: 'SF Mono', 'Fira Code', 'JetBrains Mono', monospace;
+      font-size: 13px;
+      line-height: 1.6;
+      max-width: 880px;
+      margin: 0 auto;
+      padding: 32px 24px 64px;
+    }
+    h1 {
+      font-size: 18px;
+      margin: 0 0 24px;
+      color: #fafafa;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    h1 img { width: 24px; height: 24px; }
+    h2 {
+      font-size: 14px;
+      margin: 28px 0 12px;
+      color: #fafafa;
+      border-bottom: 1px solid #262626;
+      padding-bottom: 4px;
+    }
+    .row { display: flex; align-items: center; gap: 8px; margin: 8px 0; flex-wrap: wrap; }
+    label { color: #a1a1aa; min-width: 120px; }
+    input[type="text"], input[type="url"] {
+      flex: 1;
+      min-width: 220px;
+      background: #0d0d0d;
+      border: 1px solid #262626;
+      color: #e5e5e5;
+      padding: 6px 8px;
+      border-radius: 3px;
+      font-family: inherit;
+      font-size: 12px;
+    }
+    button {
+      background: #1a1a1a;
+      border: 1px solid #262626;
+      color: #a1a1aa;
+      padding: 4px 10px;
+      border-radius: 3px;
+      cursor: pointer;
+      font-family: inherit;
+      font-size: 12px;
+    }
+    button:hover { color: #fafafa; border-color: #404040; }
+    button.primary { background: #3b82f6; color: #fafafa; border-color: #3b82f6; }
+    button.primary:hover { background: #2563eb; }
+    button.danger:hover { color: #f87171; border-color: #f87171; }
+    .pill {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 12px;
+      font-size: 11px;
+      font-weight: 500;
+    }
+    .pill-ok { background: #052e16; color: #4ade80; border: 1px solid #14532d; }
+    .pill-warn { background: #422006; color: #fbbf24; border: 1px solid #713f12; }
+    .pill-err { background: #450a0a; color: #f87171; border: 1px solid #7f1d1d; }
+    .hint { color: #6b7280; font-size: 11px; margin: 4px 0; }
+    .key-block {
+      background: #0d0d0d;
+      border: 1px solid #262626;
+      padding: 8px 12px;
+      border-radius: 3px;
+      font-size: 11px;
+      word-break: break-all;
+      color: #e5e5e5;
+      cursor: pointer;
+    }
+    .key-block:hover { background: #141414; }
+    pre.command {
+      background: #0d0d0d;
+      border: 1px solid #262626;
+      border-radius: 3px;
+      padding: 8px 12px;
+      color: #fbbf24;
+      font-size: 11px;
+      overflow-x: auto;
+      cursor: pointer;
+      margin: 8px 0;
+    }
+    table { width: 100%; border-collapse: collapse; margin-top: 8px; }
+    th, td {
+      text-align: left;
+      padding: 6px 8px;
+      border-bottom: 1px solid #141414;
+      font-size: 12px;
+    }
+    th { color: #6b7280; font-weight: 500; font-size: 11px; }
+    .table-empty { color: #525252; font-style: italic; padding: 12px; }
+    .saved-toast {
+      color: #4ade80;
+      font-size: 11px;
+      opacity: 0;
+      transition: opacity 0.2s;
+    }
+    .saved-toast.visible { opacity: 1; }
+  </style>
+</head>
+<body>
+  <h1><img src="icons/icon-48.png" alt=""> Agiterra Wallet — Options</h1>
+
+  <h2>Wire</h2>
+  <div class="row">
+    <label>URL</label>
+    <input type="url" id="wire-url" placeholder="https://the-wire.ngrok.io">
+    <button id="save-wire-url">Save</button>
+    <span class="saved-toast" id="wire-url-toast">saved</span>
+  </div>
+
+  <div class="row">
+    <label>Identity</label>
+    <div class="key-block" id="pubkey-block" title="Click to copy">(loading…)</div>
+  </div>
+  <div class="row">
+    <label>Status</label>
+    <span id="reg-status"><span class="pill pill-warn">checking…</span></span>
+  </div>
+  <div id="register-instructions" style="display:none">
+    <div class="hint">Not registered yet. Ask your CC agent (with operator credentials, or a sponsor) to run:</div>
+    <pre class="command" id="register-command" title="Click to copy"></pre>
+  </div>
+
+  <div class="row">
+    <label>Decider target</label>
+    <input type="text" id="decider-target" placeholder="(fallback when tab isn't claimed; leave empty if using tab-claim)">
+    <button id="save-decider-target">Save</button>
+    <span class="saved-toast" id="decider-target-toast">saved</span>
+  </div>
+  <div class="hint">When set, EIP-1193 sign requests on tabs that haven't been bound via <code>wallet_use</code> route to this agent ID. With proper wallet_use claims this becomes unnecessary.</div>
+
+  <h2>Networks</h2>
+  <table id="networks-table">
+    <thead>
+      <tr><th>Chain ID</th><th>RPC URL</th><th></th></tr>
+    </thead>
+    <tbody id="networks-tbody"></tbody>
+  </table>
+  <div class="row">
+    <input type="text" id="new-chain-id" placeholder="chain id (e.g. 11155111)" style="max-width:200px">
+    <input type="url" id="new-rpc-url" placeholder="https://eth-sepolia.g.alchemy.com/v2/...">
+    <button id="add-network">+ Add</button>
+  </div>
+
+  <h2>Wallets</h2>
+  <div class="hint">Read-only here. Edit access / rename / grant via the Wire dashboard.</div>
+  <table id="wallets-table">
+    <thead>
+      <tr><th>Name</th><th>Address</th><th>Chain</th><th>Decider</th><th>Access</th></tr>
+    </thead>
+    <tbody id="wallets-tbody"></tbody>
+  </table>
+
+  <script src="options.js"></script>
+</body>
+</html>
