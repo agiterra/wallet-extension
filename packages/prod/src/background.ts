@@ -29,6 +29,7 @@ import { loadOrCreateIdentity } from "./wire-identity.js";
 import { WireConnection } from "./wire-connection.js";
 import { WalletDirectory } from "./wallet-directory.js";
 import { TabClaims } from "./tab-claims.js";
+import { VaultCreateHandler } from "./vault-create-handler.js";
 import { WireDecider } from "./decider-wire.js";
 
 const WIRE_URL_KEY = "agiterra-wallet-extension-wire-url";
@@ -41,6 +42,8 @@ const DECIDER_TARGET_KEY = "agiterra-wallet-extension-decider-target";
 
   const directory = new WalletDirectory(connection);
   const tabClaims = new TabClaims(connection, directory);
+  // Constructed for side-effects (subscribes to wallet.vault.create_request on the connection).
+  void new VaultCreateHandler(connection, directory);
 
   // Initial directory pull + seeding (best-effort; runs in background so
   // chrome.runtime.onMessage handler is registered before anything async).
