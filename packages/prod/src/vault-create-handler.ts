@@ -133,7 +133,10 @@ export class VaultCreateHandler {
         access: { mode: "specific", agents: [sourceAgent] },
       };
       const nextDir = { ...dir, [lowerAddr]: meta };
-      await this.connection.setPluginSetting("wallet-vault", "wallets", nextDir);
+      // Write to THIS instance's namespace (= vault id). The wire server only
+      // permits an agent to write its own plugin_settings namespace, and the
+      // directory reads the same one. Default instances use "wallet-vault".
+      await this.connection.setPluginSetting(this.directory.namespace, "wallets", nextDir);
 
       console.log(`[wallet-vault] created wallet ${address} (name='${req.name}', creator=${sourceAgent})`);
 

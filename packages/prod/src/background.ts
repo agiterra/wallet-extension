@@ -40,7 +40,11 @@ const DECIDER_TARGET_KEY = "agiterra-wallet-extension-decider-target";
   const connection = new WireConnection(identity);
   connection.start();
 
-  const directory = new WalletDirectory(connection);
+  // Directory namespace = this instance's Wire vault id. A non-default instance
+  // (e.g. browser-use "wallet-vault-e2e") owns its own plugin_settings pool
+  // (the wire server only lets an agent write its own namespace). Default
+  // "wallet-vault" installs are unaffected.
+  const directory = new WalletDirectory(connection, identity.agentId);
   const tabClaims = new TabClaims(connection, directory);
   // Constructed for side-effects (subscribes to wallet.vault.create_request on the connection).
   void new VaultCreateHandler(connection, directory);
@@ -143,7 +147,7 @@ async function seedDirectoryFromVault(
 
   if (mutated) {
     try {
-      await connection.setPluginSetting("wallet-vault", "wallets", current);
+      await connection.setPluginSetting(directory.namespace, "wallets", current);
     } catch (e) {
       console.warn("[wallet-vault] failed to seed plugin_settings:", (e as Error).message);
     }

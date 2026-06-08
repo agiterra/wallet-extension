@@ -1,9 +1,9 @@
 /**
  * WalletDirectory — local cache of wallet metadata + access policy.
  *
- * Sourced from Wire's plugin_settings (namespace="wallet-vault",
- * key="wallets"). Subscribes to `plugin_settings.updated` for live
- * refresh. Used by:
+ * Sourced from Wire's plugin_settings (namespace = this instance's Wire vault
+ * id, default "wallet-vault"; key="wallets"). Subscribes to
+ * `plugin_settings.updated` for live refresh. Used by:
  *   - WireDecider to verify response sender against the wallet's allowlist.
  *   - TabClaims to gate tab-bind requests on the requesting agent's access.
  *   - background-core to look up per-wallet chain_id, name, etc.
@@ -32,14 +32,22 @@ export class WalletDirectory {
   private wallets: WalletDirectoryMap = {};
   private subscribers = new Set<(map: WalletDirectoryMap) => void>();
 
-  constructor(private connection: WireConnection) {
+  // `namespace` is this extension instance's Wire vault id (identity.agentId).
+  // The wire server enforces writer==namespace on plugin_settings PUT, so a
+  // non-default instance (ENG-2947 browser-use, e.g. "wallet-vault-e2e") can
+  // only write — and must therefore read — its OWN namespace. Defaults to
+  // "wallet-vault" so existing single-instance installs are unchanged.
+  constructor(
+    private connection: WireConnection,
+    public readonly namespace: string = WALLET_VAULT_NAMESPACE,
+  ) {
     this.connection.onEvent((event) => {
       // plugin_settings.updated is published as a broadcast (no dest), so
       // it arrives with the bare topic — no envelope unwrap needed here.
       // (The webhook-prefix shape only happens for /webhooks/:dest/:topic.)
       if (event.topic !== "plugin_settings.updated" && event.topic !== "plugin_settings.deleted") return;
       const payload = event.payload as PluginSettingsUpdatedPayload | undefined;
-      if (!payload || payload.namespace !== WALLET_VAULT_NAMESPACE || payload.key !== WALLETS_KEY) return;
+      if (!payload || payload.namespace !== this.namespace || payload.key !== WALLETS_KEY) return;
       this.wallets = (payload.value ?? {}) as WalletDirectoryMap;
       this.notify();
       console.log(`[wallet-vault] directory refreshed via Wire: ${Object.keys(this.wallets).length} wallets`);
@@ -48,7 +56,7 @@ export class WalletDirectory {
 
   /** One-shot initial pull from Wire on boot. Subsequent updates come via SSE. */
   async refresh(wireUrl: string): Promise<void> {
-    const res = await fetch(`${wireUrl}/plugin_settings/${WALLET_VAULT_NAMESPACE}/${WALLETS_KEY}`);
+    const res = await fetch(`${wireUrl}/plugin_settings/${this.namespace}/${WALLETS_KEY}`);
     if (res.status === 404) {
       this.wallets = {};
       this.notify();
