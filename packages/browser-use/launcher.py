@@ -20,6 +20,7 @@ import glob
 import hashlib
 import json
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -44,6 +45,10 @@ def find_chrome_for_testing() -> str:
             raise FileNotFoundError(f"AGITERRA_CHROME_FOR_TESTING does not exist: {override}")
         return override
 
+    # Patterns are in priority order; the first pattern with any match wins, and
+    # within it we pick the highest Playwright revision. Revisions are bare
+    # integers (e.g. chromium-999, chromium-1208), so sort NUMERICALLY — a
+    # lexical sort would rank "999" above "1208".
     patterns = [
         # Playwright's bundled Chrome for Testing (what browser-use downloads)
         os.path.expanduser("~/Library/Caches/ms-playwright/chromium-*/chrome-mac*/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing"),
@@ -51,15 +56,19 @@ def find_chrome_for_testing() -> str:
         os.path.expanduser("~/.cache/ms-playwright/chromium-*/chrome-linux*/chrome"),
         "/Applications/Chromium.app/Contents/MacOS/Chromium",
     ]
-    matches: list[str] = []
+
+    def _revision(path: str) -> int:
+        m = re.search(r"chromium-(\d+)", path)
+        return int(m.group(1)) if m else -1
+
     for p in patterns:
-        matches.extend(sorted(glob.glob(p)))
-    if not matches:
-        raise FileNotFoundError(
-            "No Chrome for Testing / Chromium found. Install one (e.g. `python -m playwright install chromium`) "
-            "or set AGITERRA_CHROME_FOR_TESTING. Do NOT use branded Google Chrome — it ignores --load-extension."
-        )
-    return matches[-1]  # highest build number
+        hits = glob.glob(p)
+        if hits:
+            return max(hits, key=_revision)
+    raise FileNotFoundError(
+        "No Chrome for Testing / Chromium found. Install one (e.g. `python -m playwright install chromium`) "
+        "or set AGITERRA_CHROME_FOR_TESTING. Do NOT use branded Google Chrome — it ignores --load-extension."
+    )
 
 
 def extension_id_for(dist_path: str | os.PathLike) -> str:
@@ -72,7 +81,13 @@ def extension_id_for(dist_path: str | os.PathLike) -> str:
 
 
 class CDP:
-    """Minimal CDP client over a single websocket (browser-level endpoint)."""
+    """Minimal CDP client over a single websocket (browser-level endpoint).
+
+    NOTE: assumes SERIAL use — one in-flight call() at a time. call() reads the
+    socket until it sees its own response id and drops everything else, so two
+    concurrent call()s on the same instance could consume each other's frames.
+    The harness drives it sequentially; don't gather() calls on one CDP.
+    """
 
     def __init__(self, ws):
         self._ws = ws
@@ -135,11 +150,12 @@ class CDP:
         await asyncio.sleep(settle_s)
         return sid
 
-    async def eth_request(self, page_sid: str, method: str, params: list | None = None) -> dict:
+    async def eth_request(self, page_sid: str, method: str, params: list | None = None, timeout_s: float = 90.0) -> dict:
         """Call window.ethereum.request({method, params}) in the page and await
-        it. personal_sign/eth_sendTransaction block until the decider responds
-        (the WireDecider's 60s timeout bounds it), so there is no client-side
-        timeout here. Returns {ok, result} or {ok:false, error:{code,message}}.
+        it. Sign methods block until the decider responds (WireDecider bounds it
+        at 60s); `timeout_s` is a client-side backstop so a never-settling
+        round-trip can't hang the harness on the shared socket. Returns
+        {ok, result} or {ok:false, error:{code,message}}.
         """
         expr = (
             "(async()=>{try{const r=await window.ethereum.request("
@@ -147,7 +163,13 @@ class CDP:
             + ");return JSON.stringify({ok:true,result:r});}"
             "catch(e){return JSON.stringify({ok:false,error:{code:e&&e.code,message:String(e&&e.message||e)}});}})()"
         )
-        r = await self.call("Runtime.evaluate", {"expression": expr, "awaitPromise": True, "returnByValue": True}, page_sid)
+        try:
+            r = await asyncio.wait_for(
+                self.call("Runtime.evaluate", {"expression": expr, "awaitPromise": True, "returnByValue": True}, page_sid),
+                timeout=timeout_s,
+            )
+        except asyncio.TimeoutError:
+            return {"ok": False, "error": {"code": None, "message": f"eth_request({method}) timed out after {timeout_s}s"}}
         if r.get("exceptionDetails"):
             raise RuntimeError(f"eth_request({method}) threw: {r['exceptionDetails']}")
         return json.loads(r["result"]["value"])

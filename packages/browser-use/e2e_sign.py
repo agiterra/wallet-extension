@@ -29,6 +29,7 @@ from launcher import launch_with_extension, provision_vault_identity, WIRE_URL_K
 from wire_admin import derive_pubkey_b64, sponsor_register, get_directory
 
 VAULT_ID = "wallet-vault-e2e"
+WALLET_NAME = "eng-2947-e2e"
 DISPLAY_NAME = "Wallet Vault (e2e)"
 DECIDER_TARGET = "fondant"
 MESSAGE = "ENG-2947 browser-use e2e — Agiterra Wallet personal_sign"
@@ -54,13 +55,18 @@ async def main() -> int:
         print(f"[e2e] instance connected as {VAULT_ID} (pubkey {pubkey}).")
 
         # 5: wait for Fondant's wallet_create to land a wallet in our namespace
-        print(f"[e2e] >>> ping Fondant: wallet_create({{name:'eng-2947-e2e', vault_id:'{VAULT_ID}'}})")
+        print(f"[e2e] >>> ping Fondant: wallet_create({{name:'{WALLET_NAME}', vault_id:'{VAULT_ID}'}})")
         print(f"[e2e] waiting up to {WALLET_WAIT_S}s for the wallet to appear in the {VAULT_ID} directory...")
         address = None
         for _ in range(WALLET_WAIT_S * 2):
             wallets = get_directory(wire_url, VAULT_ID)
             if wallets:
-                address = next(iter(wallets))  # first (only) wallet's address
+                # pick the wallet we asked Fondant to create, not an arbitrary entry
+                address = next(
+                    (a for a, m in wallets.items()
+                     if (m or {}).get("name") == WALLET_NAME or (m or {}).get("operator_name") == WALLET_NAME),
+                    next(iter(wallets)),
+                )
                 print(f"[e2e] wallet appeared: {address} ({wallets[address].get('name')})")
                 break
             await asyncio.sleep(0.5)

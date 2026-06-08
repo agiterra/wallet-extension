@@ -202,9 +202,18 @@ $("add-network").addEventListener("click", async () => {
 
 // ---- Wallets section ----
 
+/** plugin_settings namespace for this instance = its Wire vault id (default
+ *  "wallet-vault"). Mirrors WalletDirectory's per-instance namespace so the
+ *  options UI of a non-default instance reads its OWN directory. */
+async function vaultNamespace(): Promise<string> {
+  const stored = await chrome.storage.local.get(WIRE_IDENTITY_KEY);
+  const id = stored[WIRE_IDENTITY_KEY] as StoredIdentity | undefined;
+  return id?.agentId || "wallet-vault";
+}
+
 async function loadWalletDirectory(wireUrl: string): Promise<Record<string, WalletMeta>> {
   try {
-    const res = await fetch(`${wireUrl}/plugin_settings/wallet-vault/wallets`);
+    const res = await fetch(`${wireUrl}/plugin_settings/${await vaultNamespace()}/wallets`);
     if (res.status === 404) return {};
     if (!res.ok) return {};
     const body = (await res.json()) as { value?: Record<string, WalletMeta> };

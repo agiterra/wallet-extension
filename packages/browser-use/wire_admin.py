@@ -93,17 +93,20 @@ def sponsor_register(
 
 
 def is_registered(wire_url: str, agent_id: str) -> bool:
-    """Unauthenticated existence probe (GET /peers/agents/:id → 200/404)."""
+    """Unauthenticated existence probe (GET /peers/agents/:id → 200/404).
+    Returns False on 404 OR an unreachable Wire (URLError) — never raises."""
     try:
         with urllib.request.urlopen(f"{wire_url.rstrip('/')}/peers/agents/{agent_id}") as r:
             return r.status == 200
-    except urllib.error.HTTPError:
+    except urllib.error.URLError:  # HTTPError (incl. 404) is a subclass
         return False
 
 
 def get_directory(wire_url: str, namespace: str) -> dict:
     """Read a vault's wallet directory (plugin_settings <namespace>/wallets).
-    The GET is unauthenticated (any reader); returns {address: meta, ...} or {}."""
+    The GET is unauthenticated (any reader); returns {address: meta, ...} or {}.
+    Returns {} on 404 or a transient connection error (so poll loops keep going);
+    re-raises a non-404 HTTP error."""
     try:
         with urllib.request.urlopen(f"{wire_url.rstrip('/')}/plugin_settings/{namespace}/wallets") as r:
             body = json.loads(r.read().decode())
@@ -112,3 +115,5 @@ def get_directory(wire_url: str, namespace: str) -> dict:
         if e.code == 404:
             return {}
         raise
+    except urllib.error.URLError:
+        return {}
