@@ -29,9 +29,16 @@ from launcher import launch_with_extension, provision_vault_identity, WIRE_URL_K
 from wire_admin import derive_pubkey_b64, sponsor_register, get_directory
 
 VAULT_ID = "wallet-vault-e2e"
-WALLET_NAME = "eng-2947-e2e"
+# Unique per run: the wallet-vault-e2e plugin_settings directory persists across
+# runs, so each run uses a fresh name (Fondant can't re-create a name that's
+# already in the directory). Pass E2E_WALLET_NAME to coordinate with the approver.
+WALLET_NAME = os.environ.get("E2E_WALLET_NAME", "eng-2947-e2e")
 DISPLAY_NAME = "Wallet Vault (e2e)"
-DECIDER_TARGET = "fondant"
+# Who the WireDecider routes sign requests to (must be the wallet's creator /
+# in its access list). 'fondant' for the cross-agent demo; the orchestrator's
+# own id for a self-contained, latency-free approve (the 60s decider window is
+# too tight for live inter-agent approval).
+DECIDER_TARGET = os.environ.get("E2E_DECIDER_TARGET", "fondant")
 MESSAGE = "ENG-2947 browser-use e2e — Agiterra Wallet personal_sign"
 WALLET_WAIT_S = 300  # generous window for the human/agent-in-the-loop wallet_create
 
@@ -52,31 +59,44 @@ async def main() -> int:
         reg = sponsor_register(wire_url, sponsor_id, sponsor_key, VAULT_ID, pubkey, DISPLAY_NAME, force_rotate=True)
         assert reg["status"] in (200, 201), f"sponsor_register failed: {reg}"
         await h.cdp.seed_storage(h.extension_id, {WIRE_URL_KEY: wire_url})
-        # The extension auto-bootstraps a local-rpc "dev-wallet" as wallets[0];
-        # getActiveWallet defaults to wallets[0], which would route personal_sign
-        # to the dead local-rpc decider. Clear the vault so Fondant's wire-mode
-        # e2e wallet becomes the SINGLE active wallet (the PR#1 sidestep).
-        await h.cdp.seed_storage(h.extension_id, {VAULT_KEY: []})
-        print(f"[e2e] instance connected as {VAULT_ID} (pubkey {pubkey}); vault cleared for single-active-wallet.")
+        print(f"[e2e] instance connected as {VAULT_ID} (pubkey {pubkey}).")
 
-        # 5: wait for Fondant's wallet_create to land a wallet in our namespace
+        # 5: wait for Fondant's wallet_create to land THIS run's wallet (matched by
+        # name — the directory persists across runs, so a stale entry must not be
+        # mistaken for the fresh one) in our namespace.
         print(f"[e2e] >>> ping Fondant: wallet_create({{name:'{WALLET_NAME}', vault_id:'{VAULT_ID}'}})")
-        print(f"[e2e] waiting up to {WALLET_WAIT_S}s for the wallet to appear in the {VAULT_ID} directory...")
+        print(f"[e2e] waiting up to {WALLET_WAIT_S}s for wallet '{WALLET_NAME}' in the {VAULT_ID} directory...")
         address = None
         for _ in range(WALLET_WAIT_S * 2):
             wallets = get_directory(wire_url, VAULT_ID)
-            if wallets:
-                # pick the wallet we asked Fondant to create, not an arbitrary entry
-                address = next(
-                    (a for a, m in wallets.items()
-                     if (m or {}).get("name") == WALLET_NAME or (m or {}).get("operator_name") == WALLET_NAME),
-                    next(iter(wallets)),
-                )
+            address = next(
+                (a for a, m in wallets.items()
+                 if (m or {}).get("name") == WALLET_NAME or (m or {}).get("operator_name") == WALLET_NAME),
+                None,
+            )
+            if address:
                 print(f"[e2e] wallet appeared: {address} ({wallets[address].get('name')})")
                 break
             await asyncio.sleep(0.5)
         if not address:
-            print("[e2e] FAIL: no wallet appeared (did Fondant wallet_create with the vault_id? is v0.7.0 deployed?)")
+            print(f"[e2e] FAIL: wallet '{WALLET_NAME}' did not appear (Fondant wallet_create with vault_id={VAULT_ID}?)")
+            return 1
+
+        # The reloaded boot async-bootstraps a local-rpc "dev-wallet"; getActiveWallet
+        # defaults to wallets[0], so we must make the wire wallet the only one. Once
+        # Fondant's wire wallet is in the vault, pin the vault to JUST it (removing the
+        # dev-wallet). Done AFTER create → race-free vs the async bootstrap (unlike a
+        # blind pre-clear, which the bootstrap could re-populate).
+        for _ in range(60):
+            vault = (await h.cdp.read_storage(h.extension_id, [VAULT_KEY])).get(VAULT_KEY) or []
+            keep = [w for w in vault if str(w.get("address", "")).lower() == address.lower()]
+            if keep:
+                await h.cdp.seed_storage(h.extension_id, {VAULT_KEY: keep})
+                print(f"[e2e] vault pinned to the wire wallet {address}; dev-wallet removed.")
+                break
+            await asyncio.sleep(0.5)
+        else:
+            print(f"[e2e] FAIL: wire wallet {address} never landed in the instance vault")
             return 1
 
         # 6: drive the signature (blocks on Fondant's wallet_approve)
