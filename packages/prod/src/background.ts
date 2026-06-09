@@ -101,7 +101,7 @@ const DECIDER_TARGET_KEY = "agiterra-wallet-extension-decider-target";
     return claim?.wallet_address ?? null;
   };
 
-  installRequestHandler(makeDecider, tabResolver);
+  installRequestHandler(makeDecider, tabResolver, identity.agentId);
   console.log(`[wallet-vault] background service worker started, prod variant, v0.4.0-dev (identity: ${identity.agentId})`);
 })().catch((e: Error) => {
   console.error("[wallet-vault] boot failed:", e);

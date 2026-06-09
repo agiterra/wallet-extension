@@ -16,6 +16,12 @@ export interface Decider {
   decide(req: SignRequest): Promise<SignResponse>;
 }
 
+/**
+ * Builds the right Decider for a wallet's configured mode. Each variant (prod,
+ * ci) supplies its own factory to {@link installRequestHandler}.
+ */
+export type DeciderFactory = (config: DeciderConfig) => Decider;
+
 export class LocalRpcDecider implements Decider {
   constructor(private url: string, private authToken: string) {}
 
