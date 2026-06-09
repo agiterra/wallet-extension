@@ -113,6 +113,13 @@ async function handle(
   if (method === "eth_chainId") return { result: "0x" + activeChain.toString(16) };
   if (method === "net_version") return { result: String(activeChain) };
 
+  // Non-standard helper (ENG-3313): return THIS tab's Chrome tab id (the SW sees
+  // it as sender.tab.id). A browser-use/CDP agent can't get the Chrome tab id
+  // any other way, so it calls window.ethereum.request({method:"agiterra_getTabId"})
+  // and then binds a wallet to this tab via wallet_use({tab_id, wallet}). Returns
+  // only the caller's own tab id — a page can't enumerate others.
+  if (method === "agiterra_getTabId") return { result: sender.tab?.id ?? null };
+
   // Permission-introspection methods. Per EIP-2255, return capabilities for
   // accounts. We auto-approve since the tab claim / operator default is
   // already the consent surface.
