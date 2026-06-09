@@ -225,11 +225,12 @@ class CDP:
         return json.loads(r["result"]["value"])
 
 
-# chrome.storage.local keys the extension reads (see prod/src/*).
+# chrome.storage.local keys the extension reads (see prod/src/* and core/src/*).
 WIRE_IDENTITY_KEY = "agiterra-wallet-extension-wire-identity"
 VAULT_ID_KEY = "agiterra-wallet-extension-vault-id"
 WIRE_URL_KEY = "agiterra-wallet-extension-wire-url"
 DECIDER_TARGET_KEY = "agiterra-wallet-extension-decider-target"
+VAULT_KEY = "agiterra-wallet-vault"  # the encrypted wallet entries (vault-store.ts)
 
 
 async def provision_vault_identity(

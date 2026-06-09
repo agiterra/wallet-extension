@@ -25,7 +25,7 @@ import json
 import os
 import sys
 
-from launcher import launch_with_extension, provision_vault_identity, WIRE_URL_KEY
+from launcher import launch_with_extension, provision_vault_identity, WIRE_URL_KEY, VAULT_KEY
 from wire_admin import derive_pubkey_b64, sponsor_register, get_directory
 
 VAULT_ID = "wallet-vault-e2e"
@@ -52,7 +52,12 @@ async def main() -> int:
         reg = sponsor_register(wire_url, sponsor_id, sponsor_key, VAULT_ID, pubkey, DISPLAY_NAME, force_rotate=True)
         assert reg["status"] in (200, 201), f"sponsor_register failed: {reg}"
         await h.cdp.seed_storage(h.extension_id, {WIRE_URL_KEY: wire_url})
-        print(f"[e2e] instance connected as {VAULT_ID} (pubkey {pubkey}).")
+        # The extension auto-bootstraps a local-rpc "dev-wallet" as wallets[0];
+        # getActiveWallet defaults to wallets[0], which would route personal_sign
+        # to the dead local-rpc decider. Clear the vault so Fondant's wire-mode
+        # e2e wallet becomes the SINGLE active wallet (the PR#1 sidestep).
+        await h.cdp.seed_storage(h.extension_id, {VAULT_KEY: []})
+        print(f"[e2e] instance connected as {VAULT_ID} (pubkey {pubkey}); vault cleared for single-active-wallet.")
 
         # 5: wait for Fondant's wallet_create to land a wallet in our namespace
         print(f"[e2e] >>> ping Fondant: wallet_create({{name:'{WALLET_NAME}', vault_id:'{VAULT_ID}'}})")
