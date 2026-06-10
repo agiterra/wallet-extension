@@ -39,6 +39,15 @@ export interface DirectoryEventSource {
   onEvent(handler: (event: { topic: string; payload: unknown }) => void): () => void;
 }
 
+/** Narrow an untrusted JSON body to a plain object (not null, not an array). A
+ *  plugin_settings namespace GET returns `Record<key,value>`, but guard before
+ *  mergeWalletDirectory's `Object.entries` so a malformed body (null/array/
+ *  scalar) yields an empty directory instead of throwing. Mirrors the Python
+ *  port's `settings if isinstance(settings, dict) else {}`. */
+export function asPlainRecord(v: unknown): Record<string, unknown> {
+  return typeof v === "object" && v !== null && !Array.isArray(v) ? (v as Record<string, unknown>) : {};
+}
+
 const WALLET_VAULT_NAMESPACE = "wallet-vault";
 
 export class WalletDirectory {
@@ -97,7 +106,7 @@ export class WalletDirectory {
       console.warn(`[wallet-vault] directory refresh failed (${res.status})`);
       return;
     }
-    this.rawSettings = (await res.json()) as Record<string, unknown>;
+    this.rawSettings = asPlainRecord(await res.json());
     this.recompute();
     console.log(`[wallet-vault] directory loaded on boot: ${Object.keys(this.wallets).length} wallets`);
   }

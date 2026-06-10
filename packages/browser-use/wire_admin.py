@@ -131,10 +131,10 @@ def publish(wire_url: str, agent_id: str, priv_pkcs8_b64: str, dest: str, topic:
 
 
 def wallet_create(wire_url, agent_id, priv, vault_id, request_id, name, chain_id=None) -> dict:
-    p = {"request_id": request_id, "name": name}
+    payload = {"request_id": request_id, "name": name}
     if chain_id is not None:
-        p["chain_id"] = chain_id
-    return publish(wire_url, agent_id, priv, vault_id, "wallet.vault.create_request", p)
+        payload["chain_id"] = chain_id
+    return publish(wire_url, agent_id, priv, vault_id, "wallet.vault.create_request", payload)
 
 
 def wallet_use(wire_url, agent_id, priv, vault_id, tab_id, wallet_address) -> dict:

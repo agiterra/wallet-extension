@@ -24,6 +24,7 @@ import {
   migrateVaultPassphrase,
 } from "@agiterra/wallet-extension-core";
 import { mergeWalletDirectory } from "@agiterra/wallet-tools/directory";
+import { asPlainRecord } from "./wallet-directory.js";
 
 const WIRE_URL_KEY = "agiterra-wallet-extension-wire-url";
 const DECIDER_TARGET_KEY = "agiterra-wallet-extension-decider-target";
@@ -219,8 +220,7 @@ async function loadWalletDirectory(wireUrl: string): Promise<Record<string, Wall
     // operator UI shows the same roster.
     const res = await fetch(`${wireUrl}/plugin_settings/${await vaultNamespace()}`, { signal: AbortSignal.timeout(5000) });
     if (!res.ok) return {};
-    const settings = (await res.json()) as Record<string, unknown>;
-    return mergeWalletDirectory(settings);
+    return mergeWalletDirectory(asPlainRecord(await res.json()));
   } catch { return {}; }
 }
 

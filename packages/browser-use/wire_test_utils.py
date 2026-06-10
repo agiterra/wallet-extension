@@ -60,14 +60,18 @@ def _ro() -> Connection:
 
 
 def max_seq() -> int:
+    """Highest message sequence number currently in the Wire DB (a watermark we
+    poll past when waiting for the next sign request)."""
     c = _ro(); v = c.execute("SELECT MAX(seq) FROM messages").fetchone()[0] or 0; c.close(); return v
 
 
-def find_request_id(obj):
-    if isinstance(obj, dict):
-        if isinstance(obj.get("request_id"), str):
-            return obj["request_id"]
-        for v in obj.values():
+def find_request_id(payload):
+    """Recursively pull the first string `request_id` out of a nested Wire message
+    payload, or None if absent."""
+    if isinstance(payload, dict):
+        if isinstance(payload.get("request_id"), str):
+            return payload["request_id"]
+        for v in payload.values():
             r = find_request_id(v)
             if r:
                 return r

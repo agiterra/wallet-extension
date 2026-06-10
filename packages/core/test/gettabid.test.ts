@@ -15,3 +15,7 @@ test("resolveOwnTabId returns null when the sender has no tab context", () => {
   expect(resolveOwnTabId({})).toBeNull();
   expect(resolveOwnTabId({ tab: {} })).toBeNull();
 });
+
+test("resolveOwnTabId treats tab id 0 as a real id, not a missing tab (?? not ||)", () => {
+  expect(resolveOwnTabId({ tab: { id: 0 } })).toBe(0);
+});
