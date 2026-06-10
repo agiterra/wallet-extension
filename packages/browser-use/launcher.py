@@ -21,6 +21,7 @@ import hashlib
 import json
 import os
 import re
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -305,6 +306,24 @@ class LaunchHandle:
     extension_id: str
 
 
+def persistent_profile_dir(label: str = "agiterra") -> str:
+    """Create and return a fresh user_data_dir that browser-use will use IN
+    PLACE (so the extension's chrome.storage.local — the encrypted vault + Wire
+    identity — survives a browser restart). ENG-3313: drops the FV vault-clear.
+
+    The catch: browser-use's BrowserProfile._copy_profile() clones any
+    Chrome/Chrome-for-Testing user_data_dir into a throwaway temp dir and runs
+    from the COPY (so writes never reach the caller's dir, and a second launch
+    gets a different copy — persistence is silently lost). Its one escape hatch
+    is a path already containing the literal 'browser-use-user-data-dir-', which
+    it treats as "already temp, use in place". So we name the dir with that
+    sentinel. browser-use only ever deletes dirs it created with the
+    'browseruse-tmp-' prefix, so this dir is NOT cleaned up on session stop —
+    reuse the same path across launches to persist.
+    """
+    return tempfile.mkdtemp(prefix=f"browser-use-user-data-dir-{label}-")
+
+
 async def launch_with_extension(
     dist: str | os.PathLike = PROD_DIST,
     headless: bool | str = "new",
@@ -313,6 +332,10 @@ async def launch_with_extension(
 ) -> LaunchHandle:
     """Launch browser-use Chromium with the prod extension loaded and return a
     handle (session + a CDP client on the browser endpoint).
+
+    Pass `user_data_dir` for a PERSISTENT profile (vault + identity survive a
+    restart). Use persistent_profile_dir() to mint one — a plain path gets
+    copy-to-temp'd by browser-use and won't actually persist (see that helper).
 
     Caller is responsible for `await handle.session.stop()` and
     `await handle.cdp.close()`.

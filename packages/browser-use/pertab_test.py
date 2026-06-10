@@ -132,9 +132,11 @@ async def main() -> int:
         assert await _wait_connected(VAULT_ID), "instance never opened its Wire session"
         print(f"[3313] connected as {VAULT_ID}")
 
-        # 2) create the two wallets SEQUENTIALLY (re-publish until each lands, and
-        # confirm seller before buyer to avoid a directory-overwrite race). Per-tab
-        # claim overrides wallets[0], so no vault-clear is needed.
+        # 2) create the two wallets (re-publish until each lands). The per-key
+        # `wallet:<addr>` write-path (ENG-3313) means concurrent creates touch
+        # distinct keys and no longer race — we still create one-at-a-time here
+        # only for readable logging. Per-tab claim overrides wallets[0], so no
+        # vault-clear is needed.
         addrs = {}
         for role, name in WALLETS.items():
             addrs[role] = await _create_and_get(wire_url, me, key, name)
