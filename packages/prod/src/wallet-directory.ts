@@ -57,6 +57,9 @@ export class WalletDirectory {
       // (The webhook-prefix shape only happens for /webhooks/:dest/:topic.)
       if (event.topic !== "plugin_settings.updated" && event.topic !== "plugin_settings.deleted") return;
       const payload = event.payload as PluginSettingsUpdatedPayload | undefined;
+      // Authorization is enforced server-side: the Wire server only lets an agent
+      // PUT its OWN namespace, so an event scoped to this.namespace is trusted to
+      // have come from this vault — we don't re-check payload.updated_by here.
       if (!payload || payload.namespace !== this.namespace) return;
       // React only to directory keys: the legacy `wallets` blob or a per-key
       // `wallet:<addr>` entry. The namespace is shared, so ignore everything else
@@ -77,7 +80,7 @@ export class WalletDirectory {
     // Whole-namespace GET → Record<key, value>. Dual-read: mergeWalletDirectory
     // seeds from the legacy `wallets` blob, then per-key `wallet:<addr>` entries
     // overwrite for the same address (incremental migration off the blob).
-    const res = await fetch(`${wireUrl}/plugin_settings/${this.namespace}`);
+    const res = await fetch(`${wireUrl}/plugin_settings/${this.namespace}`, { signal: AbortSignal.timeout(5000) });
     if (res.status === 404) {
       this.rawSettings = {};
       this.recompute();

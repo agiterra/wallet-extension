@@ -17,7 +17,6 @@ Shared Wire-DB polling + create/bind/sign helpers live in wire_test_utils.
 Env: AGENT_ID, AGENT_PRIVATE_KEY, WIRE_URL.  Run: python pertab_test.py
 """
 import asyncio
-import os
 import sys
 import uuid
 
@@ -32,12 +31,7 @@ MSG = {"seller": "ENG-3313 seller tab — list property", "buyer": "ENG-3313 buy
 
 
 async def main() -> int:
-    wire_url = os.environ.get("WIRE_URL", "http://localhost:9800")
-    me = os.environ.get("AGENT_ID")
-    key = os.environ.get("AGENT_PRIVATE_KEY")
-    if not me or not key:
-        print("AGENT_ID / AGENT_PRIVATE_KEY required"); return 2
-
+    wire_url, me, key = tu.load_env()
     httpd, url = tu.start_page_server()
     h = await launch_with_extension(headless="new")
     results: dict = {}

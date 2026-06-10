@@ -5,8 +5,9 @@
  *   1. Load/create the extension's Wire identity (Ed25519 keypair).
  *   2. Open a single long-lived WireConnection (registers self as
  *      kind='integration', connects, opens SSE).
- *   3. Initialize WalletDirectory (caches plugin_settings.wallet-vault.wallets)
- *      and TabClaims (binds tab_id → agent for routing).
+ *   3. Initialize WalletDirectory (caches the vault namespace: legacy `wallets`
+ *      blob dual-read with per-key `wallet:<addr>` entries) and TabClaims
+ *      (binds tab_id → agent for routing).
  *   4. Seed the directory from any local vault entries that aren't yet
  *      in plugin_settings (handles migration from pre-v0.4 wallets).
  *   5. Wire up the EIP-1193 handler with a DeciderFactory that supplies

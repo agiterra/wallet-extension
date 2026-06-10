@@ -103,6 +103,10 @@ def is_registered(wire_url: str, agent_id: str) -> bool:
         return False
 
 
+# Cap every Wire HTTP call so a hung server can't block the harness indefinitely.
+_HTTP_TIMEOUT_S = 10
+
+
 def publish(wire_url: str, agent_id: str, priv_pkcs8_b64: str, dest: str, topic: str, payload: dict) -> dict:
     """POST a JWT-signed message to /webhooks/<dest>/<topic> (same path the
     wallet MCP uses). Lets the harness drive wallet_create / wallet_use /
@@ -117,7 +121,7 @@ def publish(wire_url: str, agent_id: str, priv_pkcs8_b64: str, dest: str, topic:
         method="POST",
     )
     try:
-        with urllib.request.urlopen(req) as r:
+        with urllib.request.urlopen(req, timeout=_HTTP_TIMEOUT_S) as r:
             return {"status": r.status, "body": r.read().decode()}
     except urllib.error.HTTPError as e:
         return {"status": e.code, "body": e.read().decode()}
@@ -186,7 +190,7 @@ def get_directory(wire_url: str, namespace: str) -> dict:
     Returns {} on 404 or a transient connection error (so poll loops keep going);
     re-raises a non-404 HTTP error."""
     try:
-        with urllib.request.urlopen(f"{wire_url.rstrip('/')}/plugin_settings/{namespace}") as r:
+        with urllib.request.urlopen(f"{wire_url.rstrip('/')}/plugin_settings/{namespace}", timeout=_HTTP_TIMEOUT_S) as r:
             settings = json.loads(r.read().decode())
             return merge_wallet_directory(settings if isinstance(settings, dict) else {})
     except urllib.error.HTTPError as e:

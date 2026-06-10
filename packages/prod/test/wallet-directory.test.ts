@@ -73,15 +73,30 @@ test("plugin_settings.deleted removes the per-key wallet, leaving the rest", () 
 test("events for a different namespace or an unrelated key are ignored", () => {
   const { connection, fire } = mockConn();
   const dir = new WalletDirectory(connection, NS);
-  fire(updated(`wallet:${ADDR_A}`, meta("alpha"), "some-other-vault")); // wrong namespace
-  fire(updated("__vault_meta", { anything: true }));                    // unrelated key
+  // wrong namespace
+  fire(updated(`wallet:${ADDR_A}`, meta("alpha"), "some-other-vault"));
+  // unrelated key in the shared namespace (not a wallet entry)
+  fire(updated("__vault_meta", { anything: true }));
   expect(Object.keys(dir.all()).length).toBe(0);
 });
 
-test("canAgentDecide reflects per-key access policy", () => {
+test("deleting the legacy `wallets` blob evicts its (un-shadowed) addresses", () => {
+  const { connection, fire } = mockConn();
+  const dir = new WalletDirectory(connection, NS);
+  fire(updated("wallets", { [ADDR_A]: meta("a"), [ADDR_B]: meta("b") }));
+  expect(Object.keys(dir.all()).length).toBe(2);
+  fire(deleted("wallets"));
+  expect(dir.get(ADDR_A)).toBeNull();
+  expect(Object.keys(dir.all()).length).toBe(0);
+});
+
+test("canAgentDecide reflects per-key access policy (specific + all)", () => {
   const { connection, fire } = mockConn();
   const dir = new WalletDirectory(connection, NS);
   fire(updated(`wallet:${ADDR_A}`, meta("alpha", "agent-x")));
   expect(dir.canAgentDecide(ADDR_A, "agent-x")).toBe(true);
   expect(dir.canAgentDecide(ADDR_A, "agent-y")).toBe(false);
+  // mode:'all' authorizes any agent
+  fire(updated(`wallet:${ADDR_B}`, { name: "open", creator: "agent-x", created_at: 1, chain_id: 11155111, access: { mode: "all", agents: [] } }));
+  expect(dir.canAgentDecide(ADDR_B, "anyone")).toBe(true);
 });

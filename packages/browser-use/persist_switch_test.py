@@ -8,7 +8,6 @@ PHASE 1 (launch #1, persistent profile):
   - wallet_create two roster wallets: alpha, beta
   - open ONE tab; bind tab -> alpha; personal_sign -> recovers alpha
   - SWITCH the same tab -> beta; personal_sign -> recovers beta   [roster-switch]
-  - snapshot the vault addresses + the extension's Wire identity
   - stop the browser but KEEP the profile dir
 
 PHASE 2 (launch #2, SAME profile, NO re-provision):
@@ -26,7 +25,6 @@ Env: AGENT_ID, AGENT_PRIVATE_KEY, WIRE_URL.  Run: python persist_switch_test.py
 """
 import asyncio
 import json
-import os
 import sys
 import uuid
 
@@ -46,19 +44,10 @@ NONCE = uuid.uuid4().hex[:6]
 ALPHA, BETA = f"alpha-{NONCE}", f"beta-{NONCE}"
 
 
-async def main() -> int:
-    wire_url = os.environ.get("WIRE_URL", "http://localhost:9800")
-    me = os.environ.get("AGENT_ID")
-    key = os.environ.get("AGENT_PRIVATE_KEY")
-    if not me or not key:
-        print("AGENT_ID / AGENT_PRIVATE_KEY required"); return 2
-
-    httpd, url = tu.start_page_server()
-    profile = create_persistent_profile_dir("3313-persist")
-    print(f"[persist] persistent profile: {profile}")
+async def _phase1(wire_url, me, key, url, profile):
+    """Launch #1: provision + create alpha/beta + sign-as-alpha + switch-to-beta.
+    Returns (a_addr, b_addr, agent1, checks)."""
     checks: dict = {}
-
-    # ---------------- PHASE 1 ----------------
     h = await launch_with_extension(headless="new", user_data_dir=profile)
     try:
         ident = await provision_vault_identity(h.cdp, h.extension_id, VAULT_ID, decider_target=me)
@@ -91,11 +80,16 @@ async def main() -> int:
 
         vault1 = (await h.cdp.read_storage(h.extension_id, [VAULT_KEY])).get(VAULT_KEY, [])
         print(f"[persist] phase1 vault has {len(vault1)} wallets; browser stopped, profile kept")
+        return a_addr, b_addr, agent1, checks
     finally:
         try: await h.cdp.close()
         finally: await h.session.stop()
 
-    # ---------------- PHASE 2 (restart, SAME profile, no re-provision) ----------------
+
+async def _phase2(wire_url, me, key, url, profile, a_addr, b_addr, agent1):
+    """Launch #2 on the SAME profile (no re-provision): assert identity + vault +
+    roster persisted, and a persisted wallet still signs. Returns checks."""
+    checks: dict = {}
     h2 = await launch_with_extension(headless="new", user_data_dir=profile)
     try:
         # No provisioning: identity + wire-url + vault all persisted in the profile.
@@ -121,10 +115,22 @@ async def main() -> int:
         rec_a2 = await tu.bind_and_sign(h2, me, key, wire_url, VAULT_ID, sid2, r2["result"], a_addr, "ENG-3313 persist — sign after restart")
         checks["sign_after_restart"] = rec_a2.lower() == a_addr.lower()
         print(f"[persist] phase2 tab->alpha sig recovers {rec_a2} — {'MATCH' if checks['sign_after_restart'] else 'MISMATCH'}")
+        return checks
     finally:
         try: await h2.cdp.close()
-        finally:
-            await h2.session.stop(); httpd.shutdown()
+        finally: await h2.session.stop()
+
+
+async def main() -> int:
+    wire_url, me, key = tu.load_env()
+    httpd, url = tu.start_page_server()
+    profile = create_persistent_profile_dir("3313-persist")
+    print(f"[persist] persistent profile: {profile}")
+    try:
+        a_addr, b_addr, agent1, checks = await _phase1(wire_url, me, key, url, profile)
+        checks.update(await _phase2(wire_url, me, key, url, profile, a_addr, b_addr, agent1))
+    finally:
+        httpd.shutdown()
 
     ok = all(checks.values())
     print("\n[persist] checks:", json.dumps(checks))

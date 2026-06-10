@@ -12,6 +12,7 @@ import http.server
 import json
 import os
 import socketserver
+import sys
 import threading
 import uuid
 from sqlite3 import Connection, connect
@@ -30,6 +31,18 @@ class PageHandler(http.server.BaseHTTPRequestHandler):
         self.send_response(200); self.send_header("content-type", "text/html"); self.end_headers(); self.wfile.write(PAGE)
     def log_message(self, *_):  # silence per-request logging
         pass
+
+
+def load_env():
+    """Read the agent's Wire creds from the environment; exit(2) if missing.
+    Returns (wire_url, agent_id, agent_private_key)."""
+    wire_url = os.environ.get("WIRE_URL", "http://localhost:9800")
+    me = os.environ.get("AGENT_ID")
+    key = os.environ.get("AGENT_PRIVATE_KEY")
+    if not me or not key:
+        print("AGENT_ID / AGENT_PRIVATE_KEY required")
+        sys.exit(2)
+    return wire_url, me, key
 
 
 def start_page_server():
