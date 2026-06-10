@@ -178,9 +178,12 @@ export class VaultCreateHandler {
     const vault = await getVault();
     vault.push(entry);
     await setVault(vault);
-    // Mark handled once the vault (the authoritative keystore) holds the new
-    // wallet, so a replay is skipped. The directory publish below is best-effort
-    // and reconciled on boot by seedDirectoryFromVault.
+    // setVault is the commit point: the wallet now EXISTS. Mark handled here so a
+    // Wire replay is skipped (no re-mint). Everything after is post-commit and
+    // best-effort — a failure must NOT bubble to the outer catch and reply ok:false
+    // for a wallet that was actually created. The creator recovers the address via
+    // the directory (the per-key write below, reconciled on boot by
+    // seedDirectoryFromVault) rather than the lost reply.
     await markCreateProcessed(dedupKey);
     const meta: WalletMeta = {
       name: req.name,
@@ -189,14 +192,18 @@ export class VaultCreateHandler {
       chain_id: req.chain_id ?? devChainId(),
       access: { mode: "specific", agents: [sourceAgent] },
     };
-    // Per-key write (ENG-3313): store this wallet under `wallet:<lowercase-addr>`
-    // rather than the whole `wallets` blob, so concurrent creates touch distinct
-    // keys and can't clobber each other. The wire server only lets an agent write
-    // its OWN namespace (= vault id).
-    await this.connection.setPluginSetting(this.directory.namespace, walletSettingKey(lowerAddr), meta);
-    console.log(`[wallet-vault] created wallet ${address} (name='${req.name}', creator=${sourceAgent})`);
-    const response: CreatedResponseOk = { request_id: req.request_id, ok: true, address, name: req.name };
-    await this.connection.publish(WALLET_VAULT_CREATED, response, sourceAgent);
+    try {
+      // Per-key write (ENG-3313): store this wallet under `wallet:<lowercase-addr>`
+      // rather than the whole `wallets` blob, so concurrent creates touch distinct
+      // keys and can't clobber each other. The wire server only lets an agent write
+      // its OWN namespace (= vault id).
+      await this.connection.setPluginSetting(this.directory.namespace, walletSettingKey(lowerAddr), meta);
+      const response: CreatedResponseOk = { request_id: req.request_id, ok: true, address, name: req.name };
+      await this.connection.publish(WALLET_VAULT_CREATED, response, sourceAgent);
+      console.log(`[wallet-vault] created wallet ${address} (name='${req.name}', creator=${sourceAgent})`);
+    } catch (e) {
+      console.warn(`[wallet-vault] wallet ${address} created but directory/reply publish failed (recoverable on boot):`, e instanceof Error ? e.message : String(e));
+    }
   }
 
   private async respondError(request_id: string, dest: string, error: string): Promise<void> {

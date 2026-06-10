@@ -15,6 +15,7 @@ import {
 import { getVault, markCreateProcessed } from "@agiterra/wallet-extension-core";
 import { walletSettingKey } from "@agiterra/wallet-tools/directory";
 import type { WalletMeta } from "@agiterra/wallet-tools";
+import { meta } from "./fixtures.js";
 
 let local: Record<string, unknown> = {};
 let session: Record<string, unknown> = {};
@@ -36,10 +37,6 @@ const chromeStub = {
 globalThis.chrome = chromeStub as unknown as typeof chrome;
 
 beforeEach(() => { local = {}; session = {}; });
-
-function meta(name: string, creator = "agent-x"): WalletMeta {
-  return { name, creator, created_at: 1, chain_id: 11155111, access: { mode: "specific", agents: [creator] } };
-}
 
 function setup(dirEntries: Record<string, WalletMeta> = {}) {
   const calls = {

@@ -7,14 +7,11 @@
  */
 import { test, expect } from "bun:test";
 import { WalletDirectory, asPlainRecord, type DirectoryEventSource } from "../src/wallet-directory.js";
+import { meta } from "./fixtures.js";
 
 const NS = "wallet-vault";
 const ADDR_A = "0x" + "a".repeat(40);
 const ADDR_B = "0x" + "b".repeat(40);
-
-function meta(name: string, creator = "agent-x") {
-  return { name, creator, created_at: 1, chain_id: 11155111, access: { mode: "specific", agents: [creator] } };
-}
 
 type WireEventLike = { topic: string; payload: unknown };
 
