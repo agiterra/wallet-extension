@@ -185,7 +185,8 @@ class CDP:
             try:
                 sid = await self._sw_session(ext_id)
                 r = await self.call("Runtime.evaluate", {"expression": expr, "awaitPromise": True, "returnByValue": True}, sid)
-            except Exception as e:  # SW target momentarily gone
+            # SW target momentarily gone (MV3 SW restarted between calls)
+            except Exception as e:
                 last = e
                 await asyncio.sleep(0.25)
                 continue
@@ -286,7 +287,8 @@ async def provision_vault_identity(
         try:
             ident = (await cdp.read_storage(new_ext_id, [WIRE_IDENTITY_KEY])).get(WIRE_IDENTITY_KEY, {})
         except Exception:
-            ident = {}  # SW context not ready yet — retry
+            # SW execution context not ready yet (chrome.* not injected) — retry
+            ident = {}
         if ident.get("agentId") == vault_id:
             break
         await asyncio.sleep(0.25)

@@ -20,8 +20,7 @@ import asyncio
 import sys
 import uuid
 
-from launcher import launch_with_extension, provision_vault_identity, WIRE_URL_KEY
-import wire_admin as wa
+from launcher import launch_with_extension
 import wire_test_utils as tu
 
 VAULT_ID = "wallet-vault-3313"
@@ -37,11 +36,7 @@ async def main() -> int:
     results: dict = {}
     try:
         # 1) provision + sponsor-register + connect (decider-target=me as a safety net)
-        ident = await provision_vault_identity(h.cdp, h.extension_id, VAULT_ID, decider_target=me)
-        pub = wa.derive_pubkey_b64(ident["privateKeyB64"])
-        assert wa.sponsor_register(wire_url, me, key, VAULT_ID, pub, "Wallet Vault (3313)", force_rotate=True)["status"] in (200, 201)
-        await h.cdp.seed_storage(h.extension_id, {WIRE_URL_KEY: wire_url})
-        assert await tu.wait_connected(VAULT_ID), "instance never opened its Wire session"
+        await tu.provision_register_connect(h, wire_url, me, key, VAULT_ID, "Wallet Vault (3313)")
         print(f"[3313] connected as {VAULT_ID}")
 
         # 2) create the two wallets (re-publish until each lands). The per-key

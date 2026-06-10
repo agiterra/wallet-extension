@@ -217,7 +217,7 @@ async function loadWalletDirectory(wireUrl: string): Promise<Record<string, Wall
     // Whole-namespace GET + dual-read merge (legacy `wallets` blob ∪ per-key
     // `wallet:<addr>` entries) — mirrors the extension's WalletDirectory so the
     // operator UI shows the same roster.
-    const res = await fetch(`${wireUrl}/plugin_settings/${await vaultNamespace()}`);
+    const res = await fetch(`${wireUrl}/plugin_settings/${await vaultNamespace()}`, { signal: AbortSignal.timeout(5000) });
     if (!res.ok) return {};
     const settings = (await res.json()) as Record<string, unknown>;
     return mergeWalletDirectory(settings);

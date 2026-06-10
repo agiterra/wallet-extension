@@ -22,7 +22,6 @@ import {
   WALLETS_LEGACY_KEY,
   addressFromWalletSettingKey,
 } from "@agiterra/wallet-tools/directory";
-import type { WireConnection } from "./wire-connection.js";
 
 interface PluginSettingsUpdatedPayload {
   namespace: string;
@@ -30,6 +29,14 @@ interface PluginSettingsUpdatedPayload {
   value: unknown;
   updated_by?: string;
   updated_at?: number;
+}
+
+/** The slice of WireConnection that WalletDirectory consumes — event
+ *  subscription only. A narrow interface (rather than the full class) so unit
+ *  tests can supply a lightweight double without casting. A real WireConnection
+ *  satisfies it. */
+export interface DirectoryEventSource {
+  onEvent(handler: (event: { topic: string; payload: unknown }) => void): () => void;
 }
 
 const WALLET_VAULT_NAMESPACE = "wallet-vault";
@@ -48,7 +55,7 @@ export class WalletDirectory {
   // only write — and must therefore read — its OWN namespace. Defaults to
   // "wallet-vault" so existing single-instance installs are unchanged.
   constructor(
-    private connection: WireConnection,
+    private connection: DirectoryEventSource,
     public readonly namespace: string = WALLET_VAULT_NAMESPACE,
   ) {
     this.connection.onEvent((event) => {

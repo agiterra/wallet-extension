@@ -6,8 +6,7 @@
  * exercised by the browser-use e2e harness, not here.
  */
 import { test, expect } from "bun:test";
-import { WalletDirectory } from "../src/wallet-directory.js";
-import type { WireConnection } from "../src/wire-connection.js";
+import { WalletDirectory, type DirectoryEventSource } from "../src/wallet-directory.js";
 
 const NS = "wallet-vault";
 const ADDR_A = "0x" + "a".repeat(40);
@@ -17,13 +16,14 @@ function meta(name: string, creator = "agent-x") {
   return { name, creator, created_at: 1, chain_id: 11155111, access: { mode: "specific", agents: [creator] } };
 }
 
-/** Minimal WireConnection double: captures the directory's event handler so the
- *  test can fire synthetic SSE events. WireConnection is a class (private
- *  fields), so a structural object needs a cast to stand in for it. */
+type WireEventLike = { topic: string; payload: unknown };
+
+/** Lightweight DirectoryEventSource double: captures the directory's event
+ *  handler so the test can fire synthetic SSE events — no cast needed. */
 function mockConn() {
-  let handler: ((e: unknown) => void) | null = null;
-  const connection = { onEvent: (h: (e: unknown) => void) => { handler = h; return () => {}; } } as unknown as WireConnection;
-  return { connection, fire: (event: unknown) => handler?.(event) };
+  let handler: ((e: WireEventLike) => void) | null = null;
+  const connection: DirectoryEventSource = { onEvent: (h) => { handler = h; return () => {}; } };
+  return { connection, fire: (event: WireEventLike) => handler?.(event) };
 }
 
 const updated = (key: string, value: unknown, namespace = NS) =>

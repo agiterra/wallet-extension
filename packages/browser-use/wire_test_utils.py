@@ -20,6 +20,7 @@ from sqlite3 import Connection, connect
 from eth_account import Account
 from eth_account.messages import encode_defunct
 
+from launcher import provision_vault_identity, WIRE_URL_KEY
 import wire_admin as wa
 
 DB = os.path.expanduser("~/.wire/wire.db")
@@ -29,7 +30,8 @@ PAGE = b"<!doctype html><meta charset=utf-8><title>eng-3313</title><body>eng-331
 class PageHandler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200); self.send_header("content-type", "text/html"); self.end_headers(); self.wfile.write(PAGE)
-    def log_message(self, *_):  # silence per-request logging
+    # silence per-request access logging
+    def log_message(self, *_):
         pass
 
 
@@ -100,6 +102,19 @@ async def wait_connected(agent: str, timeout_s: float = 25.0) -> bool:
     return False
 
 
+async def provision_register_connect(h, wire_url, me, key, vault_id, display_name):
+    """Provision the launched instance's Wire identity under `vault_id`, sponsor-
+    register it (signing as `me`), seed the wire-url, and wait for it to connect.
+    Returns the provisioned identity dict."""
+    ident = await provision_vault_identity(h.cdp, h.extension_id, vault_id, decider_target=me)
+    pub = wa.derive_pubkey_b64(ident["privateKeyB64"])
+    status = wa.sponsor_register(wire_url, me, key, vault_id, pub, display_name, force_rotate=True)["status"]
+    assert status in (200, 201), f"sponsor_register({vault_id}) failed: {status}"
+    await h.cdp.seed_storage(h.extension_id, {WIRE_URL_KEY: wire_url})
+    assert await wait_connected(vault_id), f"{vault_id} never opened its Wire session"
+    return ident
+
+
 async def create_and_get(wire_url, me, key, vault_id, name, total_s=45):
     """(Re)publish wallet_create until `name` lands in the vault directory; return
     its address, or None on timeout. Re-publishing is safe — duplicate names are
@@ -112,7 +127,8 @@ async def create_and_get(wire_url, me, key, vault_id, name, total_s=45):
             last_pub = i
         for addr, meta in wa.get_directory(wire_url, vault_id).items():
             if (meta or {}).get("name") == name:
-                await asyncio.sleep(2.0)  # let the SW's in-memory directory absorb the update
+                # let the SW's in-memory directory absorb the update before returning
+                await asyncio.sleep(2.0)
                 return addr
         await asyncio.sleep(1.0)
     return None
@@ -128,7 +144,10 @@ async def bind_and_sign(h, me, key, wire_url, vault_id, sid, tab_id, addr, msg, 
     base = max_seq()
     task = asyncio.create_task(h.cdp.eth_request(sid, "personal_sign", [msg, addr]))
     _, req_id = await next_sign_request(me, base)
-    assert req_id, f"no sign.request seen (addr={addr})"
+    if not req_id:
+        # cancel the still-pending sign so a failed run gives a clean traceback
+        task.cancel()
+        raise AssertionError(f"no sign.request seen (addr={addr})")
     wa.wallet_approve(wire_url, me, key, vault_id, req_id)
     sig = await task
     assert sig.get("ok"), f"personal_sign failed: {sig}"

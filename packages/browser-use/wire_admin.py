@@ -31,6 +31,10 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 
+# Cap every Wire HTTP call so a hung server can't block the harness indefinitely.
+_HTTP_TIMEOUT_S = 10
+
+
 def _b64url(b: bytes) -> str:
     return base64.urlsafe_b64encode(b).rstrip(b"=").decode()
 
@@ -87,7 +91,7 @@ def sponsor_register(
         method="POST",
     )
     try:
-        with urllib.request.urlopen(req) as r:
+        with urllib.request.urlopen(req, timeout=_HTTP_TIMEOUT_S) as r:
             return {"status": r.status, "body": r.read().decode()}
     except urllib.error.HTTPError as e:
         return {"status": e.code, "body": e.read().decode()}
@@ -97,21 +101,20 @@ def is_registered(wire_url: str, agent_id: str) -> bool:
     """Unauthenticated existence probe (GET /peers/agents/:id → 200/404).
     Returns False on 404 OR an unreachable Wire (URLError) — never raises."""
     try:
-        with urllib.request.urlopen(f"{wire_url.rstrip('/')}/peers/agents/{agent_id}") as r:
+        # HTTPError (incl. 404) is a subclass of URLError, caught below
+        with urllib.request.urlopen(f"{wire_url.rstrip('/')}/peers/agents/{agent_id}", timeout=_HTTP_TIMEOUT_S) as r:
             return r.status == 200
-    except urllib.error.URLError:  # HTTPError (incl. 404) is a subclass
+    except urllib.error.URLError:
         return False
-
-
-# Cap every Wire HTTP call so a hung server can't block the harness indefinitely.
-_HTTP_TIMEOUT_S = 10
 
 
 def publish(wire_url: str, agent_id: str, priv_pkcs8_b64: str, dest: str, topic: str, payload: dict) -> dict:
     """POST a JWT-signed message to /webhooks/<dest>/<topic> (same path the
     wallet MCP uses). Lets the harness drive wallet_create / wallet_use /
     wallet_approve directly over Wire — no MCP round-trip — so the per-tab
-    binding flow runs end-to-end and repeatably."""
+    binding flow runs end-to-end and repeatably. An HTTPError returns its status;
+    a URLError (Wire unreachable / timeout) is intentionally NOT caught — a
+    publish failure should fail the harness loudly, not silently retry forever."""
     body = json.dumps(payload)
     jwt = make_jwt(agent_id, priv_pkcs8_b64, body)
     req = urllib.request.Request(

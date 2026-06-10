@@ -31,8 +31,6 @@ import uuid
 from launcher import (
     launch_with_extension,
     create_persistent_profile_dir,
-    provision_vault_identity,
-    WIRE_URL_KEY,
     WIRE_IDENTITY_KEY,
     VAULT_KEY,
 )
@@ -50,11 +48,7 @@ async def _phase1(wire_url, me, key, url, profile):
     checks: dict = {}
     h = await launch_with_extension(headless="new", user_data_dir=profile)
     try:
-        ident = await provision_vault_identity(h.cdp, h.extension_id, VAULT_ID, decider_target=me)
-        pub = wa.derive_pubkey_b64(ident["privateKeyB64"])
-        assert wa.sponsor_register(wire_url, me, key, VAULT_ID, pub, "Wallet Vault (3313 persist)", force_rotate=True)["status"] in (200, 201)
-        await h.cdp.seed_storage(h.extension_id, {WIRE_URL_KEY: wire_url})
-        assert await tu.wait_connected(VAULT_ID), "instance never connected (phase 1)"
+        await tu.provision_register_connect(h, wire_url, me, key, VAULT_ID, "Wallet Vault (3313 persist)")
         id1 = (await h.cdp.read_storage(h.extension_id, [WIRE_IDENTITY_KEY])).get(WIRE_IDENTITY_KEY, {})
         agent1 = id1.get("agentId")
         print(f"[persist] phase1 connected as {agent1}")
