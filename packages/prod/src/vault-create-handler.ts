@@ -101,24 +101,32 @@ export class VaultCreateHandler {
     this.unsubscribe = null;
   }
 
-  // Dedup keys (`<sourceAgent>:<request_id>`) being handled in THIS SW lifetime.
-  // A synchronous guard taken BEFORE any await closes the check-then-act window:
-  // Wire replays the duplicated create_request backlog into one SSE stream and
-  // handleCreate is dispatched fire-and-forget per frame, so without this two
-  // back-to-back duplicate frames could each pass the async isCreateProcessed()
-  // check before either marks, and double-mint. The persisted set covers replays
-  // across SW restarts; this covers duplicates within a single lifetime. Keyed
-  // per source agent so one agent's request_id can't shadow another's.
-  private inFlight = new Set<string>();
+  // Every create is serialized through this promise chain. The SSE callback
+  // dispatches each create_request frame fire-and-forget, and on reconnect Wire
+  // replays the whole backlog into one stream — so distinct creates would
+  // otherwise interleave. Both the vault commit (getVault→push→setVault) and the
+  // processed-set update (getProcessedCreates→append→set) are non-atomic
+  // chrome.storage read-modify-writes, where an interleaved lost update silently
+  // drops a wallet's key or forgets a handled request_id (re-minting it on the
+  // next replay — the exact failure this idempotency targets). Serializing makes
+  // each create's check→mint→mark→commit atomic w.r.t. every other create, and
+  // subsumes the same-request_id duplicate guard: a replayed frame runs only
+  // after the first completes, so isCreateProcessed() catches it.
+  private tail: Promise<void> = Promise.resolve();
 
   /**
-   * Handle one wallet.vault.create_request. Public so it can be unit-tested
-   * directly; the SSE callback in the constructor is the production entry point.
+   * Handle one wallet.vault.create_request, serialized against every other create
+   * (see `tail`). Public so it can be unit-tested directly; the SSE callback in
+   * the constructor is the production entry point.
    */
-  async handleCreate(req: CreateRequest, sourceAgent: string): Promise<void> {
+  handleCreate(req: CreateRequest, sourceAgent: string): Promise<void> {
+    const run = this.tail.then(() => this.handleCreateInner(req, sourceAgent));
+    this.tail = run.catch(() => {}); // keep the chain alive past a failed create
+    return run;
+  }
+
+  private async handleCreateInner(req: CreateRequest, sourceAgent: string): Promise<void> {
     const dedupKey = `${sourceAgent}:${req.request_id}`;
-    if (this.inFlight.has(dedupKey)) return;
-    this.inFlight.add(dedupKey);
     try {
       // Idempotency (ENG-3313): Wire replays the create_request backlog to a
       // freshly-(re)connected instance. Skip a request_id we've already handled
@@ -141,8 +149,6 @@ export class VaultCreateHandler {
     } catch (e) {
       console.error(`[wallet-vault] wallet.vault.create_request failed:`, e);
       await this.respondError(req.request_id, sourceAgent, e instanceof Error ? e.message : String(e));
-    } finally {
-      this.inFlight.delete(dedupKey);
     }
   }
 

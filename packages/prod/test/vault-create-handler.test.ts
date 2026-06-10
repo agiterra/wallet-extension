@@ -73,6 +73,7 @@ test("a replay of an already-handled request_id is skipped (idempotency, even wi
   await handler.handleCreate({ request_id: "r1", name: "alpha" }, "agent-x");
   expect((await getVault()).length).toBe(1);
   expect(calls.setPluginSetting.length).toBe(1);
+  expect(calls.publish.length).toBe(1); // the skipped replay published nothing extra
 });
 
 test("a request_id already in the persisted set is skipped (no vault write, no reply)", async () => {
@@ -84,16 +85,33 @@ test("a request_id already in the persisted set is skipped (no vault write, no r
   expect(calls.publish.length).toBe(0);
 });
 
-test("a synchronous duplicate is dropped by the in-flight guard (single mint)", async () => {
+test("two concurrent duplicates of one request_id mint once (serialized handling)", async () => {
   const { handler, calls } = setup();
   const req = { request_id: "r1", name: "alpha" };
-  // fire twice before the first await resolves — the second must hit the
-  // synchronous inFlight guard and return without minting
-  const p1 = handler.handleCreate(req, "agent-x");
-  const p2 = handler.handleCreate(req, "agent-x");
-  await Promise.all([p1, p2]);
+  // fire twice before the first resolves — handleCreate serializes through `tail`,
+  // so the second runs only after the first marks the request handled and is
+  // skipped by isCreateProcessed (no double mint, no second publish)
+  await Promise.all([handler.handleCreate(req, "agent-x"), handler.handleCreate(req, "agent-x")]);
   expect((await getVault()).length).toBe(1);
   expect(calls.setPluginSetting.length).toBe(1);
+  expect(calls.publish.length).toBe(1);
+});
+
+test("two DISTINCT request_ids fired concurrently both persist, and neither re-mints on replay", async () => {
+  const { handler, calls } = setup();
+  // fire-and-forget both before either completes. The processed-set + vault are
+  // non-atomic chrome.storage read-modify-writes; without serialization the two
+  // interleave and one request_id's update is lost (re-minted on the replay below).
+  await Promise.all([
+    handler.handleCreate({ request_id: "r1", name: "alpha" }, "agent-x"),
+    handler.handleCreate({ request_id: "r2", name: "beta" }, "agent-x"),
+  ]);
+  expect((await getVault()).length).toBe(2);
+  expect(calls.setPluginSetting.length).toBe(2);
+  // replay both — if either id was lost in the RMW it would be re-minted here
+  await handler.handleCreate({ request_id: "r1", name: "alpha" }, "agent-x");
+  await handler.handleCreate({ request_id: "r2", name: "beta" }, "agent-x");
+  expect((await getVault()).length).toBe(2);
 });
 
 test("the same request_id from a DIFFERENT agent is NOT shadowed (dedup is per-agent)", async () => {
