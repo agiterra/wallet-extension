@@ -144,3 +144,40 @@ export async function getActiveChainId(): Promise<number> {
 export async function setActiveChainId(chainId: number): Promise<void> {
   await chrome.storage.local.set({ [ACTIVE_CHAIN_KEY]: chainId });
 }
+
+// --- Idempotency for wallet.vault.create_request (ENG-3313) ---
+// Wire replays the create_request backlog to a freshly-(re)connected instance.
+// With a persistent profile that means the same create would re-mint a wallet
+// (same name, NEW address) on every restart. We dedup by request_id: a bounded,
+// FIFO set of processed request_ids persisted next to the vault.
+const PROCESSED_CREATES_KEY = "agiterra-wallet-processed-creates";
+const PROCESSED_CREATES_MAX = 500;
+
+/**
+ * Append `requestId` to the processed-create list: a no-op if it's already
+ * present, otherwise append and keep only the most recent `max`. Pure (no
+ * storage) so it's unit-testable; returns the SAME array reference when
+ * unchanged so callers can skip a redundant write.
+ */
+export function appendProcessedCreate(ids: string[], requestId: string, max = PROCESSED_CREATES_MAX): string[] {
+  if (ids.includes(requestId)) return ids;
+  const next = [...ids, requestId];
+  return next.length > max ? next.slice(next.length - max) : next;
+}
+
+async function getProcessedCreates(): Promise<string[]> {
+  const stored = await chrome.storage.local.get(PROCESSED_CREATES_KEY);
+  return (stored[PROCESSED_CREATES_KEY] as string[] | undefined) ?? [];
+}
+
+/** Has this create_request already been handled (so a Wire replay is skipped)? */
+export async function isCreateProcessed(requestId: string): Promise<boolean> {
+  return (await getProcessedCreates()).includes(requestId);
+}
+
+/** Record `requestId` as handled (deduped + bounded to the most recent set). */
+export async function markCreateProcessed(requestId: string): Promise<void> {
+  const ids = await getProcessedCreates();
+  const next = appendProcessedCreate(ids, requestId);
+  if (next !== ids) await chrome.storage.local.set({ [PROCESSED_CREATES_KEY]: next });
+}

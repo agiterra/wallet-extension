@@ -37,8 +37,8 @@ from launcher import (
 import wire_admin as wa
 import wire_test_utils as tu
 
-VAULT_ID = "wallet-vault-3313-persist"
 NONCE = uuid.uuid4().hex[:6]
+VAULT_ID = f"wallet-vault-3313-persist-{NONCE}"  # fresh namespace per run — no cross-run replay backlog
 ALPHA, BETA = f"alpha-{NONCE}", f"beta-{NONCE}"
 
 
@@ -73,7 +73,11 @@ async def _phase1(wire_url, me, key, url, profile):
         print(f"[persist] tab->beta (switch) sig recovers {rec_b} — {'MATCH' if checks['switch_beta'] else 'MISMATCH'}")
 
         vault1 = (await h.cdp.read_storage(h.extension_id, [VAULT_KEY])).get(VAULT_KEY, [])
-        print(f"[persist] phase1 vault has {len(vault1)} wallets; browser stopped, profile kept")
+        names1 = [w["name"] for w in vault1]
+        # idempotency (ENG-3313): create_request replays + harness retries must NOT
+        # re-mint the same name at a new address
+        checks["no_dupe_mints"] = len(names1) == len(set(names1))
+        print(f"[persist] phase1 vault has {len(vault1)} wallets, no dupe names: {checks['no_dupe_mints']}; profile kept")
         return a_addr, b_addr, agent1, checks
     finally:
         try: await h.cdp.close()

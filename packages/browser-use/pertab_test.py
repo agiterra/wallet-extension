@@ -23,8 +23,8 @@ import uuid
 from launcher import launch_with_extension
 import wire_test_utils as tu
 
-VAULT_ID = "wallet-vault-3313"
 NONCE = uuid.uuid4().hex[:6]
+VAULT_ID = f"wallet-vault-3313-{NONCE}"  # fresh namespace per run — no cross-run replay backlog
 WALLETS = {"seller": f"seller-{NONCE}", "buyer": f"buyer-{NONCE}"}
 MSG = {"seller": "ENG-3313 seller tab — list property", "buyer": "ENG-3313 buyer tab — buy property"}
 

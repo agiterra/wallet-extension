@@ -29,7 +29,10 @@ PAGE = b"<!doctype html><meta charset=utf-8><title>eng-3313</title><body>eng-331
 
 class PageHandler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
-        self.send_response(200); self.send_header("content-type", "text/html"); self.end_headers(); self.wfile.write(PAGE)
+        self.send_response(200)
+        self.send_header("content-type", "text/html")
+        self.end_headers()
+        self.wfile.write(PAGE)
     # silence per-request access logging
     def log_message(self, *_):
         pass
@@ -62,7 +65,10 @@ def _ro() -> Connection:
 def max_seq() -> int:
     """Highest message sequence number currently in the Wire DB (a watermark we
     poll past when waiting for the next sign request)."""
-    c = _ro(); v = c.execute("SELECT MAX(seq) FROM messages").fetchone()[0] or 0; c.close(); return v
+    c = _ro()
+    v = c.execute("SELECT MAX(seq) FROM messages").fetchone()[0] or 0
+    c.close()
+    return v
 
 
 def find_request_id(payload):
@@ -121,13 +127,15 @@ async def provision_register_connect(h, wire_url, me, key, vault_id, display_nam
 
 async def create_and_get(wire_url, me, key, vault_id, name, total_s=45):
     """(Re)publish wallet_create until `name` lands in the vault directory; return
-    its address, or None on timeout. Re-publishing is safe — duplicate names are
-    rejected by the extension; SSE replay right after connect can drop a single
-    publish, so we retry every few seconds."""
+    its address, or None on timeout. SSE replay right after connect can drop a
+    single publish, so we retry every few seconds — using ONE stable request_id so
+    the extension's create idempotency dedups the retries (no same-name re-mints
+    at new addresses)."""
+    request_id = str(uuid.uuid4())
     last_pub = -100
     for i in range(total_s):
         if i - last_pub >= 4:
-            wa.wallet_create(wire_url, me, key, vault_id, str(uuid.uuid4()), name)
+            wa.wallet_create(wire_url, me, key, vault_id, request_id, name)
             last_pub = i
         for addr, meta in wa.get_directory(wire_url, vault_id).items():
             if (meta or {}).get("name") == name:

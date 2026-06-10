@@ -44,8 +44,11 @@ export interface DirectoryEventSource {
  *  mergeWalletDirectory's `Object.entries` so a malformed body (null/array/
  *  scalar) yields an empty directory instead of throwing. Mirrors the Python
  *  port's `settings if isinstance(settings, dict) else {}`. */
+function isPlainObject(v: unknown): v is Record<string, unknown> {
+  return typeof v === "object" && v !== null && !Array.isArray(v);
+}
 export function asPlainRecord(v: unknown): Record<string, unknown> {
-  return typeof v === "object" && v !== null && !Array.isArray(v) ? (v as Record<string, unknown>) : {};
+  return isPlainObject(v) ? v : {};
 }
 
 const WALLET_VAULT_NAMESPACE = "wallet-vault";

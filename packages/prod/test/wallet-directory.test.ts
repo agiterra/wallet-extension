@@ -6,7 +6,7 @@
  * exercised by the browser-use e2e harness, not here.
  */
 import { test, expect } from "bun:test";
-import { WalletDirectory, type DirectoryEventSource } from "../src/wallet-directory.js";
+import { WalletDirectory, asPlainRecord, type DirectoryEventSource } from "../src/wallet-directory.js";
 
 const NS = "wallet-vault";
 const ADDR_A = "0x" + "a".repeat(40);
@@ -99,4 +99,22 @@ test("canAgentDecide reflects per-key access policy (specific + all)", () => {
   // mode:'all' authorizes any agent
   fire(updated(`wallet:${ADDR_B}`, { name: "open", creator: "agent-x", created_at: 1, chain_id: 11155111, access: { mode: "all", agents: [] } }));
   expect(dir.canAgentDecide(ADDR_B, "anyone")).toBe(true);
+});
+
+test("onUpdate subscribers fire with the merged map on every change", () => {
+  const { connection, fire } = mockConn();
+  const dir = new WalletDirectory(connection, NS);
+  let calls = 0;
+  let last: Record<string, unknown> = {};
+  dir.onUpdate((map) => { calls += 1; last = map; });
+  fire(updated(`wallet:${ADDR_A}`, meta("alpha")));
+  expect(calls).toBe(1);
+  expect(Object.keys(last)).toEqual([ADDR_A]);
+});
+
+test("asPlainRecord guards a malformed JSON body (null/array/scalar -> {})", () => {
+  expect(asPlainRecord(null)).toEqual({});
+  expect(asPlainRecord([1, 2])).toEqual({});
+  expect(asPlainRecord("nope")).toEqual({});
+  expect(asPlainRecord({ k: "v" })).toEqual({ k: "v" });
 });

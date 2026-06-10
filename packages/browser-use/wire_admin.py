@@ -65,6 +65,23 @@ def make_jwt(agent_id: str, priv_pkcs8_b64: str, body: str) -> str:
     return f"{signing_input}.{_b64url(sig)}"
 
 
+def _post_authenticated(url: str, body: str, jwt: str) -> dict:
+    """POST `body` to `url` with a Bearer JWT. Returns {status, body}; an HTTPError
+    returns its code + body. A URLError (Wire unreachable / timeout) is
+    intentionally NOT caught — callers fail loud rather than silently retry."""
+    req = urllib.request.Request(
+        url,
+        data=body.encode(),
+        headers={"Content-Type": "application/json", "Authorization": f"Bearer {jwt}"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=_HTTP_TIMEOUT_S) as r:
+            return {"status": r.status, "body": r.read().decode()}
+    except urllib.error.HTTPError as e:
+        return {"status": e.code, "body": e.read().decode()}
+
+
 def sponsor_register(
     wire_url: str,
     sponsor_id: str,
@@ -84,17 +101,7 @@ def sponsor_register(
         payload["force_rotate"] = True
     body = json.dumps(payload)
     jwt = make_jwt(sponsor_id, sponsor_priv_pkcs8_b64, body)
-    req = urllib.request.Request(
-        f"{wire_url.rstrip('/')}/agents/register",
-        data=body.encode(),
-        headers={"Content-Type": "application/json", "Authorization": f"Bearer {jwt}"},
-        method="POST",
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=_HTTP_TIMEOUT_S) as r:
-            return {"status": r.status, "body": r.read().decode()}
-    except urllib.error.HTTPError as e:
-        return {"status": e.code, "body": e.read().decode()}
+    return _post_authenticated(f"{wire_url.rstrip('/')}/agents/register", body, jwt)
 
 
 def is_registered(wire_url: str, agent_id: str) -> bool:
@@ -112,22 +119,10 @@ def publish(wire_url: str, agent_id: str, priv_pkcs8_b64: str, dest: str, topic:
     """POST a JWT-signed message to /webhooks/<dest>/<topic> (same path the
     wallet MCP uses). Lets the harness drive wallet_create / wallet_use /
     wallet_approve directly over Wire — no MCP round-trip — so the per-tab
-    binding flow runs end-to-end and repeatably. An HTTPError returns its status;
-    a URLError (Wire unreachable / timeout) is intentionally NOT caught — a
-    publish failure should fail the harness loudly, not silently retry forever."""
+    binding flow runs end-to-end and repeatably."""
     body = json.dumps(payload)
     jwt = make_jwt(agent_id, priv_pkcs8_b64, body)
-    req = urllib.request.Request(
-        f"{wire_url.rstrip('/')}/webhooks/{dest}/{topic}",
-        data=body.encode(),
-        headers={"Content-Type": "application/json", "Authorization": f"Bearer {jwt}"},
-        method="POST",
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=_HTTP_TIMEOUT_S) as r:
-            return {"status": r.status, "body": r.read().decode()}
-    except urllib.error.HTTPError as e:
-        return {"status": e.code, "body": e.read().decode()}
+    return _post_authenticated(f"{wire_url.rstrip('/')}/webhooks/{dest}/{topic}", body, jwt)
 
 
 def wallet_create(wire_url, agent_id, priv, vault_id, request_id, name, chain_id=None) -> dict:

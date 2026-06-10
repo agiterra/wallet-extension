@@ -34,6 +34,8 @@ import {
   setVault,
   getPassphrase,
   devChainId,
+  isCreateProcessed,
+  markCreateProcessed,
 } from "@agiterra/wallet-extension-core";
 import type { WireConnection } from "./wire-connection.js";
 import type { WalletDirectory } from "./wallet-directory.js";
@@ -89,6 +91,16 @@ export class VaultCreateHandler {
 
   private async handleCreate(req: CreateRequest, sourceAgent: string): Promise<void> {
     try {
+      // Idempotency (ENG-3313): Wire replays the create_request backlog to a
+      // freshly-(re)connected instance. Without dedup, a persistent profile
+      // would re-mint this wallet (same name, NEW address) on every restart.
+      // Skip a request_id we've already handled — independent of directory state,
+      // so it's robust to the create-before-directory-loads race.
+      if (await isCreateProcessed(req.request_id)) {
+        console.log(`[wallet-vault] create ${req.request_id} already handled — skipping replay`);
+        return;
+      }
+
       const dir = this.directory.all();
 
       // Name uniqueness per creator. Different agents can have wallets
@@ -125,6 +137,10 @@ export class VaultCreateHandler {
       const vault = await getVault();
       vault.push(entry);
       await setVault(vault);
+      // Mark handled once the vault (the authoritative keystore) holds the new
+      // wallet, so a replay of this request_id is skipped. The directory publish
+      // below is best-effort and reconciled on boot by seedDirectoryFromVault.
+      await markCreateProcessed(req.request_id);
 
       const meta: WalletMeta = {
         name: req.name,
