@@ -121,7 +121,8 @@ export class VaultCreateHandler {
    */
   handleCreate(req: CreateRequest, sourceAgent: string): Promise<void> {
     const run = this.tail.then(() => this.handleCreateInner(req, sourceAgent));
-    this.tail = run.catch(() => {}); // keep the chain alive past a failed create
+    // keep the chain alive past a failed create so the next create still runs
+    this.tail = run.catch(() => {});
     return run;
   }
 
@@ -191,16 +192,29 @@ export class VaultCreateHandler {
       chain_id: req.chain_id ?? devChainId(),
       access: { mode: "specific", agents: [sourceAgent] },
     };
-    // setVault is the commit point: the wallet now EXISTS. Everything after is
-    // post-commit and best-effort — a failure here must NOT bubble to the outer
-    // catch and reply ok:false for a wallet that was actually created (including
-    // markCreateProcessed itself: a storage write can fail during SW teardown on a
-    // persistent-profile restart). markCreateProcessed runs FIRST so a replay is
-    // suppressed before the (also-fallible) directory write + reply; if even the
-    // mark fails we log and proceed — the creator recovers the address via the
-    // directory (reconciled on boot by seedDirectoryFromVault) rather than the
-    // lost reply, and a re-mint on replay is the degraded fallback, never a false
-    // failure for a created wallet.
+    await this.postCommit(req, sourceAgent, address, lowerAddr, meta, dedupKey);
+  }
+
+  /**
+   * Post-commit bookkeeping for a wallet that setVault already committed (it now
+   * EXISTS): mark the request handled, write the per-key directory entry, and
+   * reply ok. All best-effort — a failure here (including markCreateProcessed's
+   * own chrome.storage write failing during SW teardown on a persistent-profile
+   * restart) must NOT bubble to the caller and reply ok:false for a created
+   * wallet. markCreateProcessed runs FIRST so a replay is suppressed before the
+   * also-fallible directory write + reply; if even the mark fails we log and
+   * proceed — the creator recovers the address via the directory (reconciled on
+   * boot by seedDirectoryFromVault), and a re-mint on replay is the degraded
+   * fallback, never a false failure for a created wallet.
+   */
+  private async postCommit(
+    req: CreateRequest,
+    sourceAgent: string,
+    address: string,
+    lowerAddr: string,
+    meta: WalletMeta,
+    dedupKey: string,
+  ): Promise<void> {
     try {
       await markCreateProcessed(dedupKey);
       // Per-key write (ENG-3313): store this wallet under `wallet:<lowercase-addr>`

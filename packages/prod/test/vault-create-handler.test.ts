@@ -56,7 +56,6 @@ function setup(dirEntries: Record<string, WalletMeta> = {}) {
 test("normal create persists the wallet, writes its per-key directory entry, and replies", async () => {
   const { handler, calls } = setup();
   await handler.handleCreate({ request_id: "r1", name: "alpha" }, "agent-x");
-
   const vault = await getVault();
   expect(vault.length).toBe(1);
   expect(vault[0].name).toBe("alpha");
@@ -73,12 +72,14 @@ test("a replay of an already-handled request_id is skipped (idempotency, even wi
   await handler.handleCreate({ request_id: "r1", name: "alpha" }, "agent-x");
   expect((await getVault()).length).toBe(1);
   expect(calls.setPluginSetting.length).toBe(1);
-  expect(calls.publish.length).toBe(1); // the skipped replay published nothing extra
+  // the skipped replay published nothing extra
+  expect(calls.publish.length).toBe(1);
 });
 
 test("a request_id already in the persisted set is skipped (no vault write, no reply)", async () => {
   const { handler, calls } = setup();
-  await markCreateProcessed("agent-x:r1"); // dedup key is `${sourceAgent}:${request_id}`
+  // dedup key is `${sourceAgent}:${request_id}`
+  await markCreateProcessed("agent-x:r1");
   await handler.handleCreate({ request_id: "r1", name: "alpha" }, "agent-x");
   expect((await getVault()).length).toBe(0);
   expect(calls.setPluginSetting.length).toBe(0);
@@ -127,7 +128,8 @@ test("name conflict for the same creator -> error reply, no vault write", async 
   await handler.handleCreate({ request_id: "r2", name: "alpha" }, "agent-x");
   expect((await getVault()).length).toBe(0);
   expect(calls.setPluginSetting.length).toBe(0);
-  expect(calls.publish.length).toBe(1); // respondError published
+  // respondError published
+  expect(calls.publish.length).toBe(1);
 });
 
 test("a post-commit storage failure (idempotency mark) never replies ok:false for a created wallet", async () => {
@@ -143,8 +145,10 @@ test("a post-commit storage failure (idempotency mark) never replies ok:false fo
   try {
     const { handler, calls } = setup();
     await handler.handleCreate({ request_id: "r1", name: "alpha" }, "agent-x");
-    expect((await getVault()).length).toBe(1); // committed by set #1
-    expect(calls.publish.length).toBe(0); // no false ok:false error reply
+    // committed by set #1
+    expect((await getVault()).length).toBe(1);
+    // no false ok:false error reply
+    expect(calls.publish.length).toBe(0);
   } finally {
     chromeStub.storage.local.set = origSet;
   }
