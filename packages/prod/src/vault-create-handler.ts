@@ -28,6 +28,7 @@ import {
   WALLET_VAULT_CREATE_REQUEST,
   WALLET_VAULT_CREATED,
 } from "@agiterra/wallet-tools";
+import { walletSettingKey } from "@agiterra/wallet-tools/directory";
 import {
   getVault,
   setVault,
@@ -132,11 +133,13 @@ export class VaultCreateHandler {
         chain_id: req.chain_id ?? devChainId(),
         access: { mode: "specific", agents: [sourceAgent] },
       };
-      const nextDir = { ...dir, [lowerAddr]: meta };
-      // Write to THIS instance's namespace (= vault id). The wire server only
-      // permits an agent to write its own plugin_settings namespace, and the
-      // directory reads the same one. Default instances use "wallet-vault".
-      await this.connection.setPluginSetting(this.directory.namespace, "wallets", nextDir);
+      // Per-key write (ENG-3313): store this wallet under `wallet:<lowercase-addr>`
+      // instead of rewriting the whole `wallets` blob. Concurrent creates touch
+      // distinct keys and can't clobber each other — the blob write was a
+      // read-modify-write race (4 created / 2 survived in the 3313 harness).
+      // Readers dual-read legacy-blob ∪ per-key; writers never touch the blob.
+      // Auth: the wire server only lets an agent write its OWN namespace (= vault id).
+      await this.connection.setPluginSetting(this.directory.namespace, walletSettingKey(lowerAddr), meta);
 
       console.log(`[wallet-vault] created wallet ${address} (name='${req.name}', creator=${sourceAgent})`);
 

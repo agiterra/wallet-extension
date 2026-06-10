@@ -12,17 +12,17 @@
     },
     "packages/ci": {
       "name": "@agiterra/wallet-extension-ci",
-      "version": "0.3.0-dev.0",
+      "version": "0.4.0-dev.0",
       "dependencies": {
         "@agiterra/wallet-extension-core": "workspace:*",
-        "@agiterra/wallet-tools": "agiterra/wallet-tools#v0.2.0",
+        "@agiterra/wallet-tools": "agiterra/wallet-tools#v0.3.0",
       },
     },
     "packages/core": {
       "name": "@agiterra/wallet-extension-core",
-      "version": "0.3.0-dev.0",
+      "version": "0.4.0-dev.0",
       "dependencies": {
-        "@agiterra/wallet-tools": "agiterra/wallet-tools#v0.2.0",
+        "@agiterra/wallet-tools": "agiterra/wallet-tools#v0.3.0",
         "@noble/hashes": "^1.6.0",
       },
       "devDependencies": {
@@ -31,10 +31,10 @@
     },
     "packages/prod": {
       "name": "@agiterra/wallet-extension",
-      "version": "0.3.0-dev.0",
+      "version": "0.4.0-dev.0",
       "dependencies": {
         "@agiterra/wallet-extension-core": "workspace:*",
-        "@agiterra/wallet-tools": "agiterra/wallet-tools#v0.2.0",
+        "@agiterra/wallet-tools": "agiterra/wallet-tools#v0.3.0",
       },
     },
   },
@@ -47,7 +47,7 @@
 
     "@agiterra/wallet-extension-core": ["@agiterra/wallet-extension-core@workspace:packages/core"],
 
-    "@agiterra/wallet-tools": ["@agiterra/wallet-tools@github:agiterra/wallet-tools#5d85319", { "dependencies": { "@agiterra/wire-tools": "agiterra/wire-tools#v2.3.5", "@noble/curves": "^1.6.0", "@noble/hashes": "^1.5.0" } }, "agiterra-wallet-tools-5d85319", "sha512-Gc5n0IOvVtXME2g+npYRPf8o/Ob8teE6WhwZdWiq9ksf4M8t9MfdjZms7Vf2vkEQDgt0cMDoHO33MT+tYd57/Q=="],
+    "@agiterra/wallet-tools": ["@agiterra/wallet-tools@github:agiterra/wallet-tools#2c13c4f", { "dependencies": { "@agiterra/wire-tools": "agiterra/wire-tools#v2.3.5", "@noble/curves": "^1.6.0", "@noble/hashes": "^1.5.0" } }, "agiterra-wallet-tools-2c13c4f", "sha512-kNNmVlYkuAzZSpbLu9pdacfgGmrYouqQYVVFveNM8Rnyp6RerJshwMBZjDQ6SxwD5MNVP9hTMzeU0JvnTJyltA=="],
 
     "@agiterra/wire-tools": ["@agiterra/wire-tools@github:agiterra/wire-tools#1f5ff65", { "dependencies": { "@modelcontextprotocol/sdk": "^1.29.0", "pino": "^10.3.1" } }, "agiterra-wire-tools-1f5ff65", "sha512-0bLptUllC3Zj5YX+RzXSRvRz8IdFSJpjGVaurAxvCrUJ2csinqevMqR7Zej8IjBzTLBirZYtCIxGih2DKXPbcw=="],
 

@@ -25,6 +25,7 @@ import {
   type Decider,
 } from "@agiterra/wallet-extension-core";
 import type { DeciderConfig, WalletMeta } from "@agiterra/wallet-tools";
+import { walletSettingKey } from "@agiterra/wallet-tools/directory";
 import { loadOrCreateIdentity } from "./wire-identity.js";
 import { WireConnection } from "./wire-connection.js";
 import { WalletDirectory } from "./wallet-directory.js";
@@ -124,12 +125,12 @@ async function seedDirectoryFromVault(
   const vault = await getVault();
   if (vault.length === 0) return;
 
-  const current = { ...directory.all() };
-  let mutated = false;
+  const existing = directory.all();
+  const toSeed: Array<{ addr: string; meta: WalletMeta }> = [];
 
   for (const w of vault) {
     const addr = w.address.toLowerCase();
-    if (current[addr]) continue;
+    if (existing[addr]) continue;
     const meta: WalletMeta = {
       name: w.name,
       creator: "operator",
@@ -140,16 +141,19 @@ async function seedDirectoryFromVault(
         agents: deciderTarget ? [deciderTarget] : ["operator"],
       },
     };
-    current[addr] = meta;
-    mutated = true;
+    toSeed.push({ addr, meta });
     console.log(`[wallet-vault] seeding plugin_settings for ${addr} (${w.name}) — access: ${meta.access.mode}/${meta.access.agents.join(",")}`);
   }
 
-  if (mutated) {
+  // Per-key writes (ENG-3313): one `wallet:<addr>` PUT per wallet, never the
+  // whole `wallets` blob — so a concurrent create on another instance can't be
+  // clobbered by this boot-time seed. Each write is independent; one failure
+  // doesn't abort the rest.
+  for (const { addr, meta } of toSeed) {
     try {
-      await connection.setPluginSetting(directory.namespace, "wallets", current);
+      await connection.setPluginSetting(directory.namespace, walletSettingKey(addr), meta);
     } catch (e) {
-      console.warn("[wallet-vault] failed to seed plugin_settings:", (e as Error).message);
+      console.warn(`[wallet-vault] failed to seed plugin_settings for ${addr}:`, (e as Error).message);
     }
   }
 }

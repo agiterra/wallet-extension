@@ -23,6 +23,7 @@ import {
   devPassphrase,
   migrateVaultPassphrase,
 } from "@agiterra/wallet-extension-core";
+import { mergeWalletDirectory } from "@agiterra/wallet-tools/directory";
 
 const WIRE_URL_KEY = "agiterra-wallet-extension-wire-url";
 const DECIDER_TARGET_KEY = "agiterra-wallet-extension-decider-target";
@@ -213,11 +214,13 @@ async function vaultNamespace(): Promise<string> {
 
 async function loadWalletDirectory(wireUrl: string): Promise<Record<string, WalletMeta>> {
   try {
-    const res = await fetch(`${wireUrl}/plugin_settings/${await vaultNamespace()}/wallets`);
-    if (res.status === 404) return {};
+    // Whole-namespace GET + dual-read merge (legacy `wallets` blob ∪ per-key
+    // `wallet:<addr>` entries) — mirrors the extension's WalletDirectory so the
+    // operator UI shows the same roster.
+    const res = await fetch(`${wireUrl}/plugin_settings/${await vaultNamespace()}`);
     if (!res.ok) return {};
-    const body = (await res.json()) as { value?: Record<string, WalletMeta> };
-    return body.value ?? {};
+    const settings = (await res.json()) as Record<string, unknown>;
+    return mergeWalletDirectory(settings) as Record<string, WalletMeta>;
   } catch { return {}; }
 }
 

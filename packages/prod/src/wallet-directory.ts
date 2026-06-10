@@ -15,6 +15,11 @@
  */
 
 import type { WalletDirectory as WalletDirectoryMap, WalletMeta } from "@agiterra/wallet-tools";
+import {
+  mergeWalletDirectory,
+  WALLETS_LEGACY_KEY,
+  addressFromWalletSettingKey,
+} from "@agiterra/wallet-tools/directory";
 import type { WireConnection } from "./wire-connection.js";
 
 interface PluginSettingsUpdatedPayload {
@@ -26,10 +31,13 @@ interface PluginSettingsUpdatedPayload {
 }
 
 const WALLET_VAULT_NAMESPACE = "wallet-vault";
-const WALLETS_KEY = "wallets";
 
 export class WalletDirectory {
   private wallets: WalletDirectoryMap = {};
+  // Raw `GET /plugin_settings/<namespace>` listing (key → value), kept so a
+  // single per-key SSE update can be applied and the directory re-merged
+  // (legacy `wallets` blob ∪ per-key `wallet:<addr>` entries; per-key wins).
+  private rawSettings: Record<string, unknown> = {};
   private subscribers = new Set<(map: WalletDirectoryMap) => void>();
 
   // `namespace` is this extension instance's Wire vault id (identity.agentId).
@@ -47,28 +55,38 @@ export class WalletDirectory {
       // (The webhook-prefix shape only happens for /webhooks/:dest/:topic.)
       if (event.topic !== "plugin_settings.updated" && event.topic !== "plugin_settings.deleted") return;
       const payload = event.payload as PluginSettingsUpdatedPayload | undefined;
-      if (!payload || payload.namespace !== this.namespace || payload.key !== WALLETS_KEY) return;
-      this.wallets = (payload.value ?? {}) as WalletDirectoryMap;
-      this.notify();
-      console.log(`[wallet-vault] directory refreshed via Wire: ${Object.keys(this.wallets).length} wallets`);
+      if (!payload || payload.namespace !== this.namespace) return;
+      // React only to directory keys: the legacy `wallets` blob or a per-key
+      // `wallet:<addr>` entry. The namespace is shared, so ignore everything else
+      // (e.g. a future `__vault_meta` marker) — mergeWalletDirectory skips it too.
+      if (payload.key !== WALLETS_LEGACY_KEY && addressFromWalletSettingKey(payload.key) === null) return;
+      if (event.topic === "plugin_settings.deleted") {
+        delete this.rawSettings[payload.key];
+      } else {
+        this.rawSettings[payload.key] = payload.value;
+      }
+      this.recompute();
+      console.log(`[wallet-vault] directory ${event.topic} (${payload.key}) → ${Object.keys(this.wallets).length} wallets`);
     });
   }
 
   /** One-shot initial pull from Wire on boot. Subsequent updates come via SSE. */
   async refresh(wireUrl: string): Promise<void> {
-    const res = await fetch(`${wireUrl}/plugin_settings/${this.namespace}/${WALLETS_KEY}`);
+    // Whole-namespace GET → Record<key, value>. Dual-read: mergeWalletDirectory
+    // seeds from the legacy `wallets` blob, then per-key `wallet:<addr>` entries
+    // overwrite for the same address (incremental migration off the blob).
+    const res = await fetch(`${wireUrl}/plugin_settings/${this.namespace}`);
     if (res.status === 404) {
-      this.wallets = {};
-      this.notify();
+      this.rawSettings = {};
+      this.recompute();
       return;
     }
     if (!res.ok) {
       console.warn(`[wallet-vault] directory refresh failed (${res.status})`);
       return;
     }
-    const body = await res.json() as { value?: WalletDirectoryMap };
-    this.wallets = (body.value ?? {}) as WalletDirectoryMap;
-    this.notify();
+    this.rawSettings = (await res.json()) as Record<string, unknown>;
+    this.recompute();
     console.log(`[wallet-vault] directory loaded on boot: ${Object.keys(this.wallets).length} wallets`);
   }
 
@@ -92,6 +110,12 @@ export class WalletDirectory {
   onUpdate(handler: (map: WalletDirectoryMap) => void): () => void {
     this.subscribers.add(handler);
     return () => this.subscribers.delete(handler);
+  }
+
+  /** Re-derive the merged directory from the cached raw namespace settings. */
+  private recompute(): void {
+    this.wallets = mergeWalletDirectory(this.rawSettings);
+    this.notify();
   }
 
   private notify(): void {

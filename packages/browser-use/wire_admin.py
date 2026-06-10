@@ -22,6 +22,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import re
 import time
 import urllib.error
 import urllib.request
@@ -102,15 +103,92 @@ def is_registered(wire_url: str, agent_id: str) -> bool:
         return False
 
 
+def publish(wire_url: str, agent_id: str, priv_pkcs8_b64: str, dest: str, topic: str, payload: dict) -> dict:
+    """POST a JWT-signed message to /webhooks/<dest>/<topic> (same path the
+    wallet MCP uses). Lets the harness drive wallet_create / wallet_use /
+    wallet_approve directly over Wire — no MCP round-trip — so the per-tab
+    binding flow runs end-to-end and repeatably."""
+    body = json.dumps(payload)
+    jwt = make_jwt(agent_id, priv_pkcs8_b64, body)
+    req = urllib.request.Request(
+        f"{wire_url.rstrip('/')}/webhooks/{dest}/{topic}",
+        data=body.encode(),
+        headers={"Content-Type": "application/json", "Authorization": f"Bearer {jwt}"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req) as r:
+            return {"status": r.status, "body": r.read().decode()}
+    except urllib.error.HTTPError as e:
+        return {"status": e.code, "body": e.read().decode()}
+
+
+def wallet_create(wire_url, agent_id, priv, vault_id, request_id, name, chain_id=None) -> dict:
+    p = {"request_id": request_id, "name": name}
+    if chain_id is not None:
+        p["chain_id"] = chain_id
+    return publish(wire_url, agent_id, priv, vault_id, "wallet.vault.create_request", p)
+
+
+def wallet_use(wire_url, agent_id, priv, vault_id, tab_id, wallet_address) -> dict:
+    return publish(wire_url, agent_id, priv, vault_id, "wallet.vault.tab_claim",
+                   {"tab_id": str(tab_id), "wallet_address": wallet_address})
+
+
+def wallet_approve(wire_url, agent_id, priv, vault_id, request_id) -> dict:
+    return publish(wire_url, agent_id, priv, vault_id, "wallet.sign.response",
+                   {"request_id": request_id, "action": "approve"})
+
+
+_WALLET_KEY_PREFIX = "wallet:"
+_WALLETS_LEGACY_KEY = "wallets"
+_ADDR_RE = re.compile(r"^0x[0-9a-f]{40}$")
+
+
+def _is_wallet_meta(v) -> bool:
+    """Structural check — mirrors wallet-tools isWalletMeta (directory.ts)."""
+    if not isinstance(v, dict):
+        return False
+    access = v.get("access")
+    return (
+        isinstance(v.get("name"), str)
+        and isinstance(v.get("creator"), str)
+        and isinstance(v.get("chain_id"), (int, float))
+        and isinstance(access, dict)
+        and isinstance(access.get("mode"), str)
+        and isinstance(access.get("agents"), list)
+    )
+
+
+def merge_wallet_directory(settings: dict) -> dict:
+    """Python port of wallet-tools mergeWalletDirectory (ENG-3313 dual-read):
+    the legacy `wallets` blob seeds the result; per-key `wallet:<addr>` entries
+    overwrite per address. Malformed values and unrelated keys are skipped."""
+    out: dict = {}
+    legacy = settings.get(_WALLETS_LEGACY_KEY)
+    if isinstance(legacy, dict):
+        for addr, meta in legacy.items():
+            if _is_wallet_meta(meta):
+                out[addr.lower()] = meta
+    for key, value in settings.items():
+        if key.startswith(_WALLET_KEY_PREFIX):
+            addr = key[len(_WALLET_KEY_PREFIX):].lower()
+            if _ADDR_RE.match(addr) and _is_wallet_meta(value):
+                out[addr] = value
+    return out
+
+
 def get_directory(wire_url: str, namespace: str) -> dict:
-    """Read a vault's wallet directory (plugin_settings <namespace>/wallets).
+    """Read a vault's wallet directory via the whole-namespace listing
+    (GET /plugin_settings/<namespace> → {key: value}) and dual-read merge the
+    legacy `wallets` blob with per-key `wallet:<addr>` entries (per-key wins).
     The GET is unauthenticated (any reader); returns {address: meta, ...} or {}.
     Returns {} on 404 or a transient connection error (so poll loops keep going);
     re-raises a non-404 HTTP error."""
     try:
-        with urllib.request.urlopen(f"{wire_url.rstrip('/')}/plugin_settings/{namespace}/wallets") as r:
-            body = json.loads(r.read().decode())
-            return body.get("value") or {}
+        with urllib.request.urlopen(f"{wire_url.rstrip('/')}/plugin_settings/{namespace}") as r:
+            settings = json.loads(r.read().decode())
+            return merge_wallet_directory(settings if isinstance(settings, dict) else {})
     except urllib.error.HTTPError as e:
         if e.code == 404:
             return {}
