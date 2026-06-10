@@ -70,11 +70,15 @@ type SignResult = { result?: unknown; error?: { code: number; message: string; d
 export function installRequestHandler(
   makeDecider: DeciderFactory,
   tabResolver: TabWalletResolver | null = null,
+  // Wire id of this extension instance — stamped as SignRequest.source so a
+  // published request identifies the right vault. Defaults to "wallet-vault";
+  // the prod entry passes its configurable vault id (see wire-identity.ts).
+  source: string = "wallet-vault",
 ): void {
   chrome.runtime.onMessage.addListener(
     (msg: IncomingRequest, sender, sendResponse) => {
       if (msg.type !== "wallet/request") return false;
-      void handle(msg, sender, makeDecider, tabResolver)
+      void handle(msg, sender, makeDecider, tabResolver, source)
         .then(sendResponse)
         .catch((e: Error & { code?: number }) => {
           console.error("[wallet-vault] handler crashed:", e);
@@ -98,6 +102,7 @@ async function handle(
   sender: chrome.runtime.MessageSender,
   makeDecider: DeciderFactory,
   tabResolver: TabWalletResolver | null,
+  source: string,
 ): Promise<SignResult> {
   const wallet = await getActiveWallet(sender.tab?.id, tabResolver);
   const method = msg.request.method;
@@ -176,7 +181,7 @@ async function handle(
   if (needsDecision.has(method)) {
     const signReq: SignRequest = {
       request_id: msg.request_id,
-      source: "wallet-vault",
+      source,
       wallet_address: wallet.address,
       wallet_name: wallet.name,
       tab_id: String(sender.tab?.id ?? ""),
@@ -187,6 +192,13 @@ async function handle(
       created_at: Date.now(),
     };
 
+    // WalletEntry.decider is optional in the type; in practice every wallet is
+    // created with one (bootstrap / VaultCreateHandler). Guard explicitly rather
+    // than passing undefined into the factory — surfaced once DeciderFactory got
+    // a real type.
+    if (!wallet.decider) {
+      return { error: { code: -32603, message: `wallet ${wallet.address} has no decider configured` } };
+    }
     const decider = makeDecider(wallet.decider);
 
     console.log("[wallet-vault] dispatching sign request to decider:", signReq);
