@@ -38,4 +38,4 @@ function makeDecider(config: DeciderConfig): Decider {
 
 installRequestHandler(makeDecider);
 
-console.log("[wallet-vault] background service worker started, CI variant, v0.3.0-dev");
+console.log("[wallet-vault] background service worker started, CI variant, v0.4.0-dev");

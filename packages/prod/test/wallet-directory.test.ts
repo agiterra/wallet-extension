@@ -77,6 +77,8 @@ test("events for a different namespace or an unrelated key are ignored", () => {
   fire(updated(`wallet:${ADDR_A}`, meta("alpha"), "some-other-vault"));
   // unrelated key in the shared namespace (not a wallet entry)
   fire(updated("__vault_meta", { anything: true }));
+  // a non-plugin_settings topic on the same connection (topic-filter guard)
+  fire({ topic: "wallet.vault.created", payload: { namespace: NS, key: `wallet:${ADDR_A}`, value: meta("alpha") } });
   expect(Object.keys(dir.all()).length).toBe(0);
 });
 

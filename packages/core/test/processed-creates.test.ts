@@ -18,6 +18,10 @@ test("appendProcessedCreate is a no-op (returns the same ref) for a duplicate id
   expect(appendProcessedCreate(ids, "a")).toBe(ids);
 });
 
+test("appendProcessedCreate grows up to `max` without trimming (boundary is > not >=)", () => {
+  expect(appendProcessedCreate(["a", "b"], "c", 3)).toEqual(["a", "b", "c"]);
+});
+
 test("appendProcessedCreate bounds the set to the most recent `max` (drops oldest)", () => {
   expect(appendProcessedCreate(["a", "b", "c"], "d", 3)).toEqual(["b", "c", "d"]);
 });

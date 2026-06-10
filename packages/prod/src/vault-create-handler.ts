@@ -37,8 +37,20 @@ import {
   isCreateProcessed,
   markCreateProcessed,
 } from "@agiterra/wallet-extension-core";
-import type { WireConnection } from "./wire-connection.js";
-import type { WalletDirectory } from "./wallet-directory.js";
+/** The slice of WireConnection that VaultCreateHandler needs — event
+ *  subscription + a plugin_settings write + publish. A real WireConnection
+ *  satisfies it; unit tests supply a lightweight double. */
+export interface CreateHandlerConnection {
+  onEvent(handler: (event: { topic: string; payload: unknown; source: string }) => void): () => void;
+  setPluginSetting(namespace: string, key: string, value: unknown): Promise<void>;
+  publish(topic: string, payload: unknown, dest?: string): Promise<{ seq: number }>;
+}
+
+/** The slice of WalletDirectory that VaultCreateHandler reads. */
+export interface CreateHandlerDirectory {
+  all(): Record<string, WalletMeta>;
+  readonly namespace: string;
+}
 
 interface CreateRequest {
   request_id: string;
@@ -63,8 +75,8 @@ export class VaultCreateHandler {
   private unsubscribe: (() => void) | null = null;
 
   constructor(
-    private connection: WireConnection,
-    private directory: WalletDirectory,
+    private connection: CreateHandlerConnection,
+    private directory: CreateHandlerDirectory,
   ) {
     this.unsubscribe = this.connection.onEvent((event) => {
       const matches =
@@ -89,100 +101,102 @@ export class VaultCreateHandler {
     this.unsubscribe = null;
   }
 
-  // request_ids being handled in THIS SW lifetime. A synchronous guard taken
-  // BEFORE any await closes the check-then-act window: Wire replays the
-  // duplicated create_request backlog into one SSE stream and handleCreate is
-  // dispatched fire-and-forget per frame, so without this two back-to-back
-  // duplicate frames could each pass the async isCreateProcessed() check before
-  // either marks, and double-mint. The persisted set covers replays across SW
-  // restarts; this covers duplicates within a single lifetime.
+  // Dedup keys (`<sourceAgent>:<request_id>`) being handled in THIS SW lifetime.
+  // A synchronous guard taken BEFORE any await closes the check-then-act window:
+  // Wire replays the duplicated create_request backlog into one SSE stream and
+  // handleCreate is dispatched fire-and-forget per frame, so without this two
+  // back-to-back duplicate frames could each pass the async isCreateProcessed()
+  // check before either marks, and double-mint. The persisted set covers replays
+  // across SW restarts; this covers duplicates within a single lifetime. Keyed
+  // per source agent so one agent's request_id can't shadow another's.
   private inFlight = new Set<string>();
 
-  private async handleCreate(req: CreateRequest, sourceAgent: string): Promise<void> {
-    if (this.inFlight.has(req.request_id)) return;
-    this.inFlight.add(req.request_id);
+  /**
+   * Handle one wallet.vault.create_request. Public so it can be unit-tested
+   * directly; the SSE callback in the constructor is the production entry point.
+   */
+  async handleCreate(req: CreateRequest, sourceAgent: string): Promise<void> {
+    const dedupKey = `${sourceAgent}:${req.request_id}`;
+    if (this.inFlight.has(dedupKey)) return;
+    this.inFlight.add(dedupKey);
     try {
       // Idempotency (ENG-3313): Wire replays the create_request backlog to a
-      // freshly-(re)connected instance. Without dedup, a persistent profile
-      // would re-mint this wallet (same name, NEW address) on every restart.
-      // Skip a request_id we've already handled — independent of directory state,
+      // freshly-(re)connected instance. Skip a request_id we've already handled
+      // (the persisted set survives restarts) — independent of directory state,
       // so it's robust to the create-before-directory-loads race.
-      if (await isCreateProcessed(req.request_id)) {
-        console.log(`[wallet-vault] create ${req.request_id} already handled — skipping replay`);
+      if (await isCreateProcessed(dedupKey)) {
+        console.log(`[wallet-vault] create ${req.request_id} from ${sourceAgent} already handled — skipping replay`);
         return;
       }
-
       const dir = this.directory.all();
-
-      // Name uniqueness per creator. Different agents can have wallets
-      // sharing a name; same agent cannot.
+      // Name uniqueness per creator: different agents can share a name, the same
+      // agent cannot.
       for (const meta of Object.values(dir)) {
         if (meta.creator === sourceAgent && (meta.name === req.name || meta.operator_name === req.name)) {
           await this.respondError(req.request_id, sourceAgent, `wallet named '${req.name}' already exists for agent '${sourceAgent}'`);
           return;
         }
       }
-
-      const pkHex = generatePrivateKey();
-      const address = addressFromPrivateKey(pkHex);
-      const lowerAddr = address.toLowerCase();
-
-      // (Belt + suspenders) reject if the just-generated address somehow
-      // collides with an existing entry — astronomically unlikely but a
-      // collision means key reuse, which we never want to silently overwrite.
-      if (dir[lowerAddr]) {
-        await this.respondError(req.request_id, sourceAgent, `address collision (somehow) — refusing to overwrite ${address}`);
-        return;
-      }
-
-      const passphrase = await getPassphrase();
-      const encrypted_key = await encryptPrivateKey(pkHex, passphrase);
-
-      const entry: WalletEntry = {
-        name: req.name,
-        address,
-        encrypted_key,
-        created_at: Date.now(),
-        decider: { mode: "wire" },
-      };
-      const vault = await getVault();
-      vault.push(entry);
-      await setVault(vault);
-      // Mark handled once the vault (the authoritative keystore) holds the new
-      // wallet, so a replay of this request_id is skipped. The directory publish
-      // below is best-effort and reconciled on boot by seedDirectoryFromVault.
-      await markCreateProcessed(req.request_id);
-
-      const meta: WalletMeta = {
-        name: req.name,
-        creator: sourceAgent,
-        created_at: entry.created_at,
-        chain_id: req.chain_id ?? devChainId(),
-        access: { mode: "specific", agents: [sourceAgent] },
-      };
-      // Per-key write (ENG-3313): store this wallet under `wallet:<lowercase-addr>`
-      // instead of rewriting the whole `wallets` blob. Concurrent creates touch
-      // distinct keys and can't clobber each other — the blob write was a
-      // read-modify-write race (4 created / 2 survived in the 3313 harness).
-      // Readers dual-read legacy-blob ∪ per-key; writers never touch the blob.
-      // Auth: the wire server only lets an agent write its OWN namespace (= vault id).
-      await this.connection.setPluginSetting(this.directory.namespace, walletSettingKey(lowerAddr), meta);
-
-      console.log(`[wallet-vault] created wallet ${address} (name='${req.name}', creator=${sourceAgent})`);
-
-      const response: CreatedResponseOk = {
-        request_id: req.request_id,
-        ok: true,
-        address,
-        name: req.name,
-      };
-      await this.connection.publish(WALLET_VAULT_CREATED, response, sourceAgent);
+      await this.mintAndPublish(req, sourceAgent, dir, dedupKey);
     } catch (e) {
       console.error(`[wallet-vault] wallet.vault.create_request failed:`, e);
-      await this.respondError(req.request_id, sourceAgent, (e as Error).message);
+      await this.respondError(req.request_id, sourceAgent, e instanceof Error ? e.message : String(e));
     } finally {
-      this.inFlight.delete(req.request_id);
+      this.inFlight.delete(dedupKey);
     }
+  }
+
+  /**
+   * Generate a fresh EOA, persist it to the vault, mark the request handled,
+   * publish the per-key directory entry, and reply to the creator. Assumes the
+   * idempotency + name-uniqueness gates in handleCreate already passed.
+   */
+  private async mintAndPublish(
+    req: CreateRequest,
+    sourceAgent: string,
+    dir: Record<string, WalletMeta>,
+    dedupKey: string,
+  ): Promise<void> {
+    const pkHex = generatePrivateKey();
+    const address = addressFromPrivateKey(pkHex);
+    const lowerAddr = address.toLowerCase();
+    // (Belt + suspenders) a just-generated address colliding with an existing
+    // entry means key reuse — refuse rather than silently overwrite.
+    if (dir[lowerAddr]) {
+      await this.respondError(req.request_id, sourceAgent, `address collision (somehow) — refusing to overwrite ${address}`);
+      return;
+    }
+    const passphrase = await getPassphrase();
+    const encrypted_key = await encryptPrivateKey(pkHex, passphrase);
+    const entry: WalletEntry = {
+      name: req.name,
+      address,
+      encrypted_key,
+      created_at: Date.now(),
+      decider: { mode: "wire" },
+    };
+    const vault = await getVault();
+    vault.push(entry);
+    await setVault(vault);
+    // Mark handled once the vault (the authoritative keystore) holds the new
+    // wallet, so a replay is skipped. The directory publish below is best-effort
+    // and reconciled on boot by seedDirectoryFromVault.
+    await markCreateProcessed(dedupKey);
+    const meta: WalletMeta = {
+      name: req.name,
+      creator: sourceAgent,
+      created_at: entry.created_at,
+      chain_id: req.chain_id ?? devChainId(),
+      access: { mode: "specific", agents: [sourceAgent] },
+    };
+    // Per-key write (ENG-3313): store this wallet under `wallet:<lowercase-addr>`
+    // rather than the whole `wallets` blob, so concurrent creates touch distinct
+    // keys and can't clobber each other. The wire server only lets an agent write
+    // its OWN namespace (= vault id).
+    await this.connection.setPluginSetting(this.directory.namespace, walletSettingKey(lowerAddr), meta);
+    console.log(`[wallet-vault] created wallet ${address} (name='${req.name}', creator=${sourceAgent})`);
+    const response: CreatedResponseOk = { request_id: req.request_id, ok: true, address, name: req.name };
+    await this.connection.publish(WALLET_VAULT_CREATED, response, sourceAgent);
   }
 
   private async respondError(request_id: string, dest: string, error: string): Promise<void> {
