@@ -38,7 +38,8 @@ import wire_admin as wa
 import wire_test_utils as tu
 
 NONCE = uuid.uuid4().hex[:6]
-VAULT_ID = f"wallet-vault-3313-persist-{NONCE}"  # fresh namespace per run — no cross-run replay backlog
+# fresh namespace per run — no cross-run create_request replay backlog
+VAULT_ID = f"wallet-vault-3313-persist-{NONCE}"
 ALPHA, BETA = f"alpha-{NONCE}", f"beta-{NONCE}"
 
 
@@ -100,7 +101,11 @@ async def _phase2(wire_url, me, key, url, profile, a_addr, b_addr, agent1):
         vault2 = (await h2.cdp.read_storage(h2.extension_id, [VAULT_KEY])).get(VAULT_KEY, [])
         vault2_addrs = {w["address"].lower() for w in vault2}
         checks["vault_persisted"] = a_addr.lower() in vault2_addrs and b_addr.lower() in vault2_addrs
-        print(f"[persist] phase2 vault has {len(vault2_addrs)} wallets; alpha+beta present: {checks['vault_persisted']}")
+        # the persisted processed-creates set must survive the restart too, so the
+        # backlog replay on reconnect doesn't re-mint same-name wallets
+        names2 = [w["name"] for w in vault2]
+        checks["no_dupe_after_restart"] = len(names2) == len(set(names2))
+        print(f"[persist] phase2 vault has {len(vault2_addrs)} wallets; alpha+beta present: {checks['vault_persisted']}; no dupes: {checks['no_dupe_after_restart']}")
 
         roster = wa.get_directory(wire_url, VAULT_ID)
         checks["roster_persisted"] = a_addr.lower() in roster and b_addr.lower() in roster

@@ -167,7 +167,9 @@ export function appendProcessedCreate(ids: string[], requestId: string, max = PR
 
 async function getProcessedCreates(): Promise<string[]> {
   const stored = await chrome.storage.local.get(PROCESSED_CREATES_KEY);
-  return (stored[PROCESSED_CREATES_KEY] as string[] | undefined) ?? [];
+  const v = stored[PROCESSED_CREATES_KEY];
+  // Guard the untrusted stored value (no `as`): keep only string entries.
+  return Array.isArray(v) ? v.filter((e): e is string => typeof e === "string") : [];
 }
 
 /** Has this create_request already been handled (so a Wire replay is skipped)? */
