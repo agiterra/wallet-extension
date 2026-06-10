@@ -62,13 +62,20 @@ def _ro() -> Connection:
     return connect(f"file:{DB}?mode=ro", uri=True)
 
 
+def _query_one(sql: str, params: tuple = ()):
+    """Run a read-only single-row query against the Wire DB and return the row
+    tuple (or None). Opens and closes a fresh read-only connection each call."""
+    c = _ro()
+    try:
+        return c.execute(sql, params).fetchone()
+    finally:
+        c.close()
+
+
 def max_seq() -> int:
     """Highest message sequence number currently in the Wire DB (a watermark we
     poll past when waiting for the next sign request)."""
-    c = _ro()
-    v = c.execute("SELECT MAX(seq) FROM messages").fetchone()[0] or 0
-    c.close()
-    return v
+    return _query_one("SELECT MAX(seq) FROM messages")[0] or 0
 
 
 def find_request_id(payload):
@@ -87,12 +94,10 @@ def find_request_id(payload):
 async def next_sign_request(agent: str, after_seq: int, timeout_s: float = 30.0):
     """Wait for a new wallet.sign.request directed at `agent`; return (seq, request_id)."""
     for _ in range(int(timeout_s * 4)):
-        c = _ro()
-        row = c.execute(
+        row = _query_one(
             "SELECT seq, payload FROM messages WHERE dest=? AND topic LIKE '%wallet.sign.request%' AND seq>? ORDER BY seq LIMIT 1",
             (agent, after_seq),
-        ).fetchone()
-        c.close()
+        )
         if row:
             return row[0], find_request_id(json.loads(row[1]))
         await asyncio.sleep(0.25)
@@ -103,9 +108,7 @@ async def wait_connected(agent: str, timeout_s: float = 25.0) -> bool:
     """Wait until `agent` has an open SSE session — create/claim/sign publishes
     sent before it connects aren't delivered (no live subscriber)."""
     for _ in range(int(timeout_s * 2)):
-        c = _ro()
-        row = c.execute("SELECT 1 FROM agent_sessions WHERE agent_id=? AND status='connected' LIMIT 1", (agent,)).fetchone()
-        c.close()
+        row = _query_one("SELECT 1 FROM agent_sessions WHERE agent_id=? AND status='connected' LIMIT 1", (agent,))
         if row:
             return True
         await asyncio.sleep(0.5)

@@ -89,7 +89,18 @@ export class VaultCreateHandler {
     this.unsubscribe = null;
   }
 
+  // request_ids being handled in THIS SW lifetime. A synchronous guard taken
+  // BEFORE any await closes the check-then-act window: Wire replays the
+  // duplicated create_request backlog into one SSE stream and handleCreate is
+  // dispatched fire-and-forget per frame, so without this two back-to-back
+  // duplicate frames could each pass the async isCreateProcessed() check before
+  // either marks, and double-mint. The persisted set covers replays across SW
+  // restarts; this covers duplicates within a single lifetime.
+  private inFlight = new Set<string>();
+
   private async handleCreate(req: CreateRequest, sourceAgent: string): Promise<void> {
+    if (this.inFlight.has(req.request_id)) return;
+    this.inFlight.add(req.request_id);
     try {
       // Idempotency (ENG-3313): Wire replays the create_request backlog to a
       // freshly-(re)connected instance. Without dedup, a persistent profile
@@ -169,6 +180,8 @@ export class VaultCreateHandler {
     } catch (e) {
       console.error(`[wallet-vault] wallet.vault.create_request failed:`, e);
       await this.respondError(req.request_id, sourceAgent, (e as Error).message);
+    } finally {
+      this.inFlight.delete(req.request_id);
     }
   }
 
