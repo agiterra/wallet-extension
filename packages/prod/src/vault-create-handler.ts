@@ -184,13 +184,6 @@ export class VaultCreateHandler {
     const vault = await getVault();
     vault.push(entry);
     await setVault(vault);
-    // setVault is the commit point: the wallet now EXISTS. Mark handled here so a
-    // Wire replay is skipped (no re-mint). Everything after is post-commit and
-    // best-effort — a failure must NOT bubble to the outer catch and reply ok:false
-    // for a wallet that was actually created. The creator recovers the address via
-    // the directory (the per-key write below, reconciled on boot by
-    // seedDirectoryFromVault) rather than the lost reply.
-    await markCreateProcessed(dedupKey);
     const meta: WalletMeta = {
       name: req.name,
       creator: sourceAgent,
@@ -198,7 +191,18 @@ export class VaultCreateHandler {
       chain_id: req.chain_id ?? devChainId(),
       access: { mode: "specific", agents: [sourceAgent] },
     };
+    // setVault is the commit point: the wallet now EXISTS. Everything after is
+    // post-commit and best-effort — a failure here must NOT bubble to the outer
+    // catch and reply ok:false for a wallet that was actually created (including
+    // markCreateProcessed itself: a storage write can fail during SW teardown on a
+    // persistent-profile restart). markCreateProcessed runs FIRST so a replay is
+    // suppressed before the (also-fallible) directory write + reply; if even the
+    // mark fails we log and proceed — the creator recovers the address via the
+    // directory (reconciled on boot by seedDirectoryFromVault) rather than the
+    // lost reply, and a re-mint on replay is the degraded fallback, never a false
+    // failure for a created wallet.
     try {
+      await markCreateProcessed(dedupKey);
       // Per-key write (ENG-3313): store this wallet under `wallet:<lowercase-addr>`
       // rather than the whole `wallets` blob, so concurrent creates touch distinct
       // keys and can't clobber each other. The wire server only lets an agent write
@@ -208,7 +212,7 @@ export class VaultCreateHandler {
       await this.connection.publish(WALLET_VAULT_CREATED, response, sourceAgent);
       console.log(`[wallet-vault] created wallet ${address} (name='${req.name}', creator=${sourceAgent})`);
     } catch (e) {
-      console.warn(`[wallet-vault] wallet ${address} created but directory/reply publish failed (recoverable on boot):`, e instanceof Error ? e.message : String(e));
+      console.warn(`[wallet-vault] wallet ${address} created but post-commit bookkeeping (mark/directory/reply) failed (recoverable on boot):`, e instanceof Error ? e.message : String(e));
     }
   }
 

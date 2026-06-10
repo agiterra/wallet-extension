@@ -129,3 +129,23 @@ test("name conflict for the same creator -> error reply, no vault write", async 
   expect(calls.setPluginSetting.length).toBe(0);
   expect(calls.publish.length).toBe(1); // respondError published
 });
+
+test("a post-commit storage failure (idempotency mark) never replies ok:false for a created wallet", async () => {
+  // Fail only the processed-creates write (markCreateProcessed), simulating
+  // storage teardown on a persistent-profile restart AFTER setVault commits the
+  // wallet. The wallet IS created, so this must be swallowed, not bubbled to an
+  // ok:false reply.
+  const origSet = chromeStub.storage.local.set;
+  chromeStub.storage.local.set = async (obj: Record<string, unknown>) => {
+    if ("agiterra-wallet-processed-creates" in obj) throw new Error("storage teardown");
+    Object.assign(local, obj);
+  };
+  try {
+    const { handler, calls } = setup();
+    await handler.handleCreate({ request_id: "r1", name: "alpha" }, "agent-x");
+    expect((await getVault()).length).toBe(1); // committed by set #1
+    expect(calls.publish.length).toBe(0); // no false ok:false error reply
+  } finally {
+    chromeStub.storage.local.set = origSet;
+  }
+});
