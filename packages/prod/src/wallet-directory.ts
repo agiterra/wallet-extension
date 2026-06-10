@@ -2,8 +2,10 @@
  * WalletDirectory — local cache of wallet metadata + access policy.
  *
  * Sourced from Wire's plugin_settings (namespace = this instance's Wire vault
- * id, default "wallet-vault"; key="wallets"). Subscribes to
- * `plugin_settings.updated` for live refresh. Used by:
+ * id, default "wallet-vault"). Reads the WHOLE namespace and dual-read merges
+ * the legacy `wallets` blob with per-key `wallet:<addr>` entries (per-key wins;
+ * see wallet-tools mergeWalletDirectory). Subscribes to `plugin_settings`
+ * updated/deleted events for live refresh. Used by:
  *   - WireDecider to verify response sender against the wallet's allowlist.
  *   - TabClaims to gate tab-bind requests on the requesting agent's access.
  *   - background-core to look up per-wallet chain_id, name, etc.

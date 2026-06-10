@@ -147,13 +147,13 @@ async function seedDirectoryFromVault(
 
   // Per-key writes (ENG-3313): one `wallet:<addr>` PUT per wallet, never the
   // whole `wallets` blob — so a concurrent create on another instance can't be
-  // clobbered by this boot-time seed. Each write is independent; one failure
-  // doesn't abort the rest.
-  for (const { addr, meta } of toSeed) {
-    try {
-      await connection.setPluginSetting(directory.namespace, walletSettingKey(addr), meta);
-    } catch (e) {
-      console.warn(`[wallet-vault] failed to seed plugin_settings for ${addr}:`, (e as Error).message);
-    }
-  }
+  // clobbered by this boot-time seed. The writes are independent, so run them
+  // concurrently and let each settle on its own (one failure doesn't abort the rest).
+  await Promise.allSettled(
+    toSeed.map(({ addr, meta }) =>
+      connection.setPluginSetting(directory.namespace, walletSettingKey(addr), meta).catch((e) => {
+        console.warn(`[wallet-vault] failed to seed plugin_settings for ${addr}:`, e instanceof Error ? e.message : String(e));
+      }),
+    ),
+  );
 }

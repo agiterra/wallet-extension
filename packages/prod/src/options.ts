@@ -220,7 +220,7 @@ async function loadWalletDirectory(wireUrl: string): Promise<Record<string, Wall
     const res = await fetch(`${wireUrl}/plugin_settings/${await vaultNamespace()}`);
     if (!res.ok) return {};
     const settings = (await res.json()) as Record<string, unknown>;
-    return mergeWalletDirectory(settings) as Record<string, WalletMeta>;
+    return mergeWalletDirectory(settings);
   } catch { return {}; }
 }
 

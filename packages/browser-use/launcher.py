@@ -306,20 +306,22 @@ class LaunchHandle:
     extension_id: str
 
 
-def persistent_profile_dir(label: str = "agiterra") -> str:
-    """Create and return a fresh user_data_dir that browser-use will use IN
+def create_persistent_profile_dir(label: str = "agiterra") -> str:
+    """Create ONCE and return a fresh user_data_dir that browser-use will use IN
     PLACE (so the extension's chrome.storage.local — the encrypted vault + Wire
     identity — survives a browser restart). ENG-3313: drops the FV vault-clear.
+    Each call mints a new dir; the CALLER keeps the returned path and reuses it
+    across launches to actually persist.
 
     The catch: browser-use's BrowserProfile._copy_profile() clones any
     Chrome/Chrome-for-Testing user_data_dir into a throwaway temp dir and runs
     from the COPY (so writes never reach the caller's dir, and a second launch
     gets a different copy — persistence is silently lost). Its one escape hatch
-    is a path already containing the literal 'browser-use-user-data-dir-', which
-    it treats as "already temp, use in place". So we name the dir with that
-    sentinel. browser-use only ever deletes dirs it created with the
-    'browseruse-tmp-' prefix, so this dir is NOT cleaned up on session stop —
-    reuse the same path across launches to persist.
+    (profile.py: `if 'browser-use-user-data-dir-' in user_data_str: return`) is a
+    path already containing that literal, which it treats as "already temp, use
+    in place" — so we name the dir with that sentinel. browser-use never
+    registers this in-place dir for cleanup (only dirs it itself mkdtemp's during
+    launch retries are removed), so it survives session stop for reuse.
     """
     return tempfile.mkdtemp(prefix=f"browser-use-user-data-dir-{label}-")
 
@@ -334,8 +336,8 @@ async def launch_with_extension(
     handle (session + a CDP client on the browser endpoint).
 
     Pass `user_data_dir` for a PERSISTENT profile (vault + identity survive a
-    restart). Use persistent_profile_dir() to mint one — a plain path gets
-    copy-to-temp'd by browser-use and won't actually persist (see that helper).
+    restart). Use create_persistent_profile_dir() to mint one — a plain path
+    gets copy-to-temp'd by browser-use and won't actually persist (see helper).
 
     Caller is responsible for `await handle.session.stop()` and
     `await handle.cdp.close()`.
