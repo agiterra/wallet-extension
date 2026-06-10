@@ -97,6 +97,15 @@ export function installRequestHandler(
   })();
 }
 
+/** ENG-3313: the caller's OWN Chrome tab id (what the SW stamps on sign
+ *  requests and what `wallet_use({tab_id})` keys on), or null when there is no
+ *  tab context — an injected/SW-to-SW caller has no `sender.tab`. Takes just the
+ *  structural slice it reads (a `chrome.runtime.MessageSender` satisfies it) so
+ *  the null-fallback is unit-testable without a live browser or a cast. */
+export function resolveOwnTabId(sender: { tab?: { id?: number } }): number | null {
+  return sender.tab?.id ?? null;
+}
+
 async function handle(
   msg: IncomingRequest,
   sender: chrome.runtime.MessageSender,
@@ -112,6 +121,13 @@ async function handle(
   // Read-only methods that don't need a decider:
   if (method === "eth_chainId") return { result: "0x" + activeChain.toString(16) };
   if (method === "net_version") return { result: String(activeChain) };
+
+  // Non-standard helper (ENG-3313): return THIS tab's Chrome tab id (the SW sees
+  // it as sender.tab.id). A browser-use/CDP agent can't get the Chrome tab id
+  // any other way, so it calls window.ethereum.request({method:"agiterra_getTabId"})
+  // and then binds a wallet to this tab via wallet_use({tab_id, wallet}). Returns
+  // only the caller's own tab id — a page can't enumerate others.
+  if (method === "agiterra_getTabId") return { result: resolveOwnTabId(sender) };
 
   // Permission-introspection methods. Per EIP-2255, return capabilities for
   // accounts. We auto-approve since the tab claim / operator default is

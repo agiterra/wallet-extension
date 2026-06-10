@@ -28,14 +28,29 @@ import {
   WALLET_VAULT_CREATE_REQUEST,
   WALLET_VAULT_CREATED,
 } from "@agiterra/wallet-tools";
+import { walletSettingKey } from "@agiterra/wallet-tools/directory";
 import {
   getVault,
   setVault,
   getPassphrase,
   devChainId,
+  isCreateProcessed,
+  markCreateProcessed,
 } from "@agiterra/wallet-extension-core";
-import type { WireConnection } from "./wire-connection.js";
-import type { WalletDirectory } from "./wallet-directory.js";
+/** The slice of WireConnection that VaultCreateHandler needs — event
+ *  subscription + a plugin_settings write + publish. A real WireConnection
+ *  satisfies it; unit tests supply a lightweight double. */
+export interface CreateHandlerConnection {
+  onEvent(handler: (event: { topic: string; payload: unknown; source: string }) => void): () => void;
+  setPluginSetting(namespace: string, key: string, value: unknown): Promise<void>;
+  publish(topic: string, payload: unknown, dest?: string): Promise<{ seq: number }>;
+}
+
+/** The slice of WalletDirectory that VaultCreateHandler reads. */
+export interface CreateHandlerDirectory {
+  all(): Record<string, WalletMeta>;
+  readonly namespace: string;
+}
 
 interface CreateRequest {
   request_id: string;
@@ -60,8 +75,8 @@ export class VaultCreateHandler {
   private unsubscribe: (() => void) | null = null;
 
   constructor(
-    private connection: WireConnection,
-    private directory: WalletDirectory,
+    private connection: CreateHandlerConnection,
+    private directory: CreateHandlerDirectory,
   ) {
     this.unsubscribe = this.connection.onEvent((event) => {
       const matches =
@@ -86,70 +101,132 @@ export class VaultCreateHandler {
     this.unsubscribe = null;
   }
 
-  private async handleCreate(req: CreateRequest, sourceAgent: string): Promise<void> {
-    try {
-      const dir = this.directory.all();
+  // Every create is serialized through this promise chain. The SSE callback
+  // dispatches each create_request frame fire-and-forget, and on reconnect Wire
+  // replays the whole backlog into one stream — so distinct creates would
+  // otherwise interleave. Both the vault commit (getVault→push→setVault) and the
+  // processed-set update (getProcessedCreates→append→set) are non-atomic
+  // chrome.storage read-modify-writes, where an interleaved lost update silently
+  // drops a wallet's key or forgets a handled request_id (re-minting it on the
+  // next replay — the exact failure this idempotency targets). Serializing makes
+  // each create's check→mint→mark→commit atomic w.r.t. every other create, and
+  // subsumes the same-request_id duplicate guard: a replayed frame runs only
+  // after the first completes, so isCreateProcessed() catches it.
+  private tail: Promise<void> = Promise.resolve();
 
-      // Name uniqueness per creator. Different agents can have wallets
-      // sharing a name; same agent cannot.
+  /**
+   * Handle one wallet.vault.create_request, serialized against every other create
+   * (see `tail`). Public so it can be unit-tested directly; the SSE callback in
+   * the constructor is the production entry point.
+   */
+  handleCreate(req: CreateRequest, sourceAgent: string): Promise<void> {
+    const run = this.tail.then(() => this.handleCreateInner(req, sourceAgent));
+    // keep the chain alive past a failed create so the next create still runs
+    this.tail = run.catch(() => {});
+    return run;
+  }
+
+  private async handleCreateInner(req: CreateRequest, sourceAgent: string): Promise<void> {
+    const dedupKey = `${sourceAgent}:${req.request_id}`;
+    try {
+      // Idempotency (ENG-3313): Wire replays the create_request backlog to a
+      // freshly-(re)connected instance. Skip a request_id we've already handled
+      // (the persisted set survives restarts) — independent of directory state,
+      // so it's robust to the create-before-directory-loads race.
+      if (await isCreateProcessed(dedupKey)) {
+        console.log(`[wallet-vault] create ${req.request_id} from ${sourceAgent} already handled — skipping replay`);
+        return;
+      }
+      const dir = this.directory.all();
+      // Name uniqueness per creator: different agents can share a name, the same
+      // agent cannot.
       for (const meta of Object.values(dir)) {
         if (meta.creator === sourceAgent && (meta.name === req.name || meta.operator_name === req.name)) {
           await this.respondError(req.request_id, sourceAgent, `wallet named '${req.name}' already exists for agent '${sourceAgent}'`);
           return;
         }
       }
-
-      const pkHex = generatePrivateKey();
-      const address = addressFromPrivateKey(pkHex);
-      const lowerAddr = address.toLowerCase();
-
-      // (Belt + suspenders) reject if the just-generated address somehow
-      // collides with an existing entry — astronomically unlikely but a
-      // collision means key reuse, which we never want to silently overwrite.
-      if (dir[lowerAddr]) {
-        await this.respondError(req.request_id, sourceAgent, `address collision (somehow) — refusing to overwrite ${address}`);
-        return;
-      }
-
-      const passphrase = await getPassphrase();
-      const encrypted_key = await encryptPrivateKey(pkHex, passphrase);
-
-      const entry: WalletEntry = {
-        name: req.name,
-        address,
-        encrypted_key,
-        created_at: Date.now(),
-        decider: { mode: "wire" },
-      };
-      const vault = await getVault();
-      vault.push(entry);
-      await setVault(vault);
-
-      const meta: WalletMeta = {
-        name: req.name,
-        creator: sourceAgent,
-        created_at: entry.created_at,
-        chain_id: req.chain_id ?? devChainId(),
-        access: { mode: "specific", agents: [sourceAgent] },
-      };
-      const nextDir = { ...dir, [lowerAddr]: meta };
-      // Write to THIS instance's namespace (= vault id). The wire server only
-      // permits an agent to write its own plugin_settings namespace, and the
-      // directory reads the same one. Default instances use "wallet-vault".
-      await this.connection.setPluginSetting(this.directory.namespace, "wallets", nextDir);
-
-      console.log(`[wallet-vault] created wallet ${address} (name='${req.name}', creator=${sourceAgent})`);
-
-      const response: CreatedResponseOk = {
-        request_id: req.request_id,
-        ok: true,
-        address,
-        name: req.name,
-      };
-      await this.connection.publish(WALLET_VAULT_CREATED, response, sourceAgent);
+      await this.mintAndPublish(req, sourceAgent, dir, dedupKey);
     } catch (e) {
       console.error(`[wallet-vault] wallet.vault.create_request failed:`, e);
-      await this.respondError(req.request_id, sourceAgent, (e as Error).message);
+      await this.respondError(req.request_id, sourceAgent, e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  /**
+   * Generate a fresh EOA, persist it to the vault, mark the request handled,
+   * publish the per-key directory entry, and reply to the creator. Assumes the
+   * idempotency + name-uniqueness gates in handleCreate already passed.
+   */
+  private async mintAndPublish(
+    req: CreateRequest,
+    sourceAgent: string,
+    dir: Record<string, WalletMeta>,
+    dedupKey: string,
+  ): Promise<void> {
+    const pkHex = generatePrivateKey();
+    const address = addressFromPrivateKey(pkHex);
+    const lowerAddr = address.toLowerCase();
+    // (Belt + suspenders) a just-generated address colliding with an existing
+    // entry means key reuse — refuse rather than silently overwrite.
+    if (dir[lowerAddr]) {
+      await this.respondError(req.request_id, sourceAgent, `address collision (somehow) — refusing to overwrite ${address}`);
+      return;
+    }
+    const passphrase = await getPassphrase();
+    const encrypted_key = await encryptPrivateKey(pkHex, passphrase);
+    const entry: WalletEntry = {
+      name: req.name,
+      address,
+      encrypted_key,
+      created_at: Date.now(),
+      decider: { mode: "wire" },
+    };
+    const vault = await getVault();
+    vault.push(entry);
+    await setVault(vault);
+    const meta: WalletMeta = {
+      name: req.name,
+      creator: sourceAgent,
+      created_at: entry.created_at,
+      chain_id: req.chain_id ?? devChainId(),
+      access: { mode: "specific", agents: [sourceAgent] },
+    };
+    await this.postCommit(req, sourceAgent, address, lowerAddr, meta, dedupKey);
+  }
+
+  /**
+   * Post-commit bookkeeping for a wallet that setVault already committed (it now
+   * EXISTS): mark the request handled, write the per-key directory entry, and
+   * reply ok. All best-effort — a failure here (including markCreateProcessed's
+   * own chrome.storage write failing during SW teardown on a persistent-profile
+   * restart) must NOT bubble to the caller and reply ok:false for a created
+   * wallet. markCreateProcessed runs FIRST so a replay is suppressed before the
+   * also-fallible directory write + reply; if even the mark fails we log and
+   * proceed — the creator recovers the address via the directory (reconciled on
+   * boot by seedDirectoryFromVault), and a re-mint on replay is the degraded
+   * fallback, never a false failure for a created wallet.
+   */
+  private async postCommit(
+    req: CreateRequest,
+    sourceAgent: string,
+    address: string,
+    lowerAddr: string,
+    meta: WalletMeta,
+    dedupKey: string,
+  ): Promise<void> {
+    try {
+      await markCreateProcessed(dedupKey);
+      // Per-key write (ENG-3313): store this wallet under `wallet:<lowercase-addr>`
+      // rather than the whole `wallets` blob, so concurrent creates touch distinct
+      // keys and can't clobber each other. The wire server only lets an agent write
+      // its OWN namespace (= vault id).
+      await this.connection.setPluginSetting(this.directory.namespace, walletSettingKey(lowerAddr), meta);
+      const response: CreatedResponseOk = { request_id: req.request_id, ok: true, address, name: req.name };
+      await this.connection.publish(WALLET_VAULT_CREATED, response, sourceAgent);
+      console.log(`[wallet-vault] created wallet ${address} (name='${req.name}', creator=${sourceAgent})`);
+    } catch (e) {
+      console.warn(`[wallet-vault] wallet ${address} created but post-commit bookkeeping (mark/directory/reply) failed (recoverable on boot):`, e instanceof Error ? e.message : String(e));
     }
   }
 

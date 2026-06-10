@@ -5,8 +5,9 @@
  *   1. Load/create the extension's Wire identity (Ed25519 keypair).
  *   2. Open a single long-lived WireConnection (registers self as
  *      kind='integration', connects, opens SSE).
- *   3. Initialize WalletDirectory (caches plugin_settings.wallet-vault.wallets)
- *      and TabClaims (binds tab_id → agent for routing).
+ *   3. Initialize WalletDirectory (caches the vault namespace: legacy `wallets`
+ *      blob dual-read with per-key `wallet:<addr>` entries) and TabClaims
+ *      (binds tab_id → agent for routing).
  *   4. Seed the directory from any local vault entries that aren't yet
  *      in plugin_settings (handles migration from pre-v0.4 wallets).
  *   5. Wire up the EIP-1193 handler with a DeciderFactory that supplies
@@ -25,6 +26,7 @@ import {
   type Decider,
 } from "@agiterra/wallet-extension-core";
 import type { DeciderConfig, WalletMeta } from "@agiterra/wallet-tools";
+import { walletSettingKey } from "@agiterra/wallet-tools/directory";
 import { loadOrCreateIdentity } from "./wire-identity.js";
 import { WireConnection } from "./wire-connection.js";
 import { WalletDirectory } from "./wallet-directory.js";
@@ -124,12 +126,12 @@ async function seedDirectoryFromVault(
   const vault = await getVault();
   if (vault.length === 0) return;
 
-  const current = { ...directory.all() };
-  let mutated = false;
+  const existing = directory.all();
+  const toSeed: Array<{ addr: string; meta: WalletMeta }> = [];
 
   for (const w of vault) {
     const addr = w.address.toLowerCase();
-    if (current[addr]) continue;
+    if (existing[addr]) continue;
     const meta: WalletMeta = {
       name: w.name,
       creator: "operator",
@@ -140,16 +142,19 @@ async function seedDirectoryFromVault(
         agents: deciderTarget ? [deciderTarget] : ["operator"],
       },
     };
-    current[addr] = meta;
-    mutated = true;
+    toSeed.push({ addr, meta });
     console.log(`[wallet-vault] seeding plugin_settings for ${addr} (${w.name}) — access: ${meta.access.mode}/${meta.access.agents.join(",")}`);
   }
 
-  if (mutated) {
-    try {
-      await connection.setPluginSetting(directory.namespace, "wallets", current);
-    } catch (e) {
-      console.warn("[wallet-vault] failed to seed plugin_settings:", (e as Error).message);
-    }
-  }
+  // Per-key writes (ENG-3313): one `wallet:<addr>` PUT per wallet, never the
+  // whole `wallets` blob — so a concurrent create on another instance can't be
+  // clobbered by this boot-time seed. The writes are independent, so run them
+  // concurrently and let each settle on its own (one failure doesn't abort the rest).
+  await Promise.allSettled(
+    toSeed.map(({ addr, meta }) =>
+      connection.setPluginSetting(directory.namespace, walletSettingKey(addr), meta).catch((e) => {
+        console.warn(`[wallet-vault] failed to seed plugin_settings for ${addr}:`, e instanceof Error ? e.message : String(e));
+      }),
+    ),
+  );
 }

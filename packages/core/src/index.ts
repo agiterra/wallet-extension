@@ -14,6 +14,8 @@ export {
   isDevPassphrase,
   devPassphrase,
   migrateVaultPassphrase,
+  isCreateProcessed,
+  markCreateProcessed,
 } from "./vault-store.js";
 export { signEip1193 } from "./sign.js";
 export type { SigningContext, SigningResult } from "./sign.js";

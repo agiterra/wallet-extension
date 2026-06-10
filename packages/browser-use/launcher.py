@@ -21,6 +21,7 @@ import hashlib
 import json
 import os
 import re
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -174,30 +175,48 @@ class CDP:
             raise RuntimeError(f"eth_request({method}) threw: {r['exceptionDetails']}")
         return json.loads(r["result"]["value"])
 
+    async def _sw_eval(self, ext_id: str, expr: str, label: str, tries: int = 60):
+        """Evaluate `expr` in the extension's service worker, retrying transient
+        not-ready states: an MV3 SW can restart, leaving its target briefly absent
+        or its context without chrome.* injected (chrome.storage undefined →
+        "reading 'local'"). Re-acquires the SW session each attempt."""
+        last = None
+        for _ in range(tries):
+            try:
+                sid = await self._sw_session(ext_id)
+                r = await self.call("Runtime.evaluate", {"expression": expr, "awaitPromise": True, "returnByValue": True}, sid)
+            # SW target momentarily gone (MV3 SW restarted between calls)
+            except Exception as e:
+                last = e
+                await asyncio.sleep(0.25)
+                continue
+            ed = r.get("exceptionDetails")
+            if ed:
+                desc = json.dumps(ed)
+                if "reading 'local'" in desc or "chrome is not defined" in desc or "reading 'storage'" in desc:
+                    last = ed
+                    await asyncio.sleep(0.25)
+                    continue
+                raise RuntimeError(f"{label} failed: {ed}")
+            return r
+        raise RuntimeError(f"{label} failed after retries (SW not ready): {last}")
+
     async def seed_storage(self, ext_id: str, mapping: dict) -> None:
         """Set chrome.storage.local keys inside the extension's service worker
-        — e.g. the Wire URL, the (future) vault id, and the decider-target.
-        Seed BEFORE the extension connects to Wire (it is inert until
-        'agiterra-wallet-extension-wire-url' is set; see wire-connection.ts).
-        """
-        sid = await self._sw_session(ext_id)
+        — e.g. the Wire URL, the vault id, the decider-target. Seed BEFORE the
+        extension connects to Wire (it is inert until the wire-url is set)."""
         expr = (
             "new Promise((res,rej)=>chrome.storage.local.set(" + json.dumps(mapping) +
             ",()=>{const e=chrome.runtime.lastError;e?rej(new Error(e.message)):res('ok')}))"
         )
-        r = await self.call("Runtime.evaluate", {"expression": expr, "awaitPromise": True, "returnByValue": True}, sid)
-        if r.get("exceptionDetails"):
-            raise RuntimeError(f"seed_storage failed: {r['exceptionDetails']}")
+        await self._sw_eval(ext_id, expr, "seed_storage")
 
     async def remove_storage(self, ext_id: str, keys: list[str]) -> None:
-        sid = await self._sw_session(ext_id)
         expr = (
             "new Promise((res,rej)=>chrome.storage.local.remove(" + json.dumps(keys) +
             ",()=>{const e=chrome.runtime.lastError;e?rej(new Error(e.message)):res('ok')}))"
         )
-        r = await self.call("Runtime.evaluate", {"expression": expr, "awaitPromise": True, "returnByValue": True}, sid)
-        if r.get("exceptionDetails"):
-            raise RuntimeError(f"remove_storage failed: {r['exceptionDetails']}")
+        await self._sw_eval(ext_id, expr, "remove_storage")
 
     async def reload_extension(self, ext_id: str, timeout_s: float = 12.0) -> str | None:
         """chrome.runtime.reload() from inside the SW, then wait for the SW to
@@ -213,15 +232,12 @@ class CDP:
         return await self.wait_for_extension_sw(timeout_s)
 
     async def read_storage(self, ext_id: str, keys: list[str] | None = None) -> dict:
-        sid = await self._sw_session(ext_id)
         arg = json.dumps(keys) if keys is not None else "null"
         expr = (
             "new Promise((res,rej)=>chrome.storage.local.get(" + arg +
             ",(v)=>{const e=chrome.runtime.lastError;e?rej(new Error(e.message)):res(JSON.stringify(v))}))"
         )
-        r = await self.call("Runtime.evaluate", {"expression": expr, "awaitPromise": True, "returnByValue": True}, sid)
-        if r.get("exceptionDetails"):
-            raise RuntimeError(f"read_storage failed: {r['exceptionDetails']}")
+        r = await self._sw_eval(ext_id, expr, "read_storage")
         return json.loads(r["result"]["value"])
 
 
@@ -261,13 +277,18 @@ async def provision_vault_identity(
     if not new_ext_id:
         raise RuntimeError("extension service worker did not return after reload")
 
-    # The SW target can reappear BEFORE loadOrCreateIdentity finishes writing the
-    # re-minted identity, so poll storage until it shows the seeded vault id
-    # (otherwise we'd read a stale/empty identity). Seed wire-url only after —
-    # the connect loop must not start under the wrong id.
+    # The SW target can reappear BEFORE its execution context is ready (chrome.*
+    # not yet injected → read_storage throws) AND before loadOrCreateIdentity has
+    # written the re-minted identity. Poll, tolerating transient errors, until
+    # storage shows the seeded vault id. Seed wire-url only after — the connect
+    # loop must not start under the wrong id.
     ident: dict = {}
-    for _ in range(40):
-        ident = (await cdp.read_storage(new_ext_id, [WIRE_IDENTITY_KEY])).get(WIRE_IDENTITY_KEY, {})
+    for _ in range(80):
+        try:
+            ident = (await cdp.read_storage(new_ext_id, [WIRE_IDENTITY_KEY])).get(WIRE_IDENTITY_KEY, {})
+        except Exception:
+            # SW execution context not ready yet (chrome.* not injected) — retry
+            ident = {}
         if ident.get("agentId") == vault_id:
             break
         await asyncio.sleep(0.25)
@@ -287,6 +308,26 @@ class LaunchHandle:
     extension_id: str
 
 
+def create_persistent_profile_dir(label: str = "agiterra") -> str:
+    """Create ONCE and return a fresh user_data_dir that browser-use will use IN
+    PLACE (so the extension's chrome.storage.local — the encrypted vault + Wire
+    identity — survives a browser restart). ENG-3313: drops the FV vault-clear.
+    Each call mints a new dir; the CALLER keeps the returned path and reuses it
+    across launches to actually persist.
+
+    The catch: browser-use's BrowserProfile._copy_profile() clones any
+    Chrome/Chrome-for-Testing user_data_dir into a throwaway temp dir and runs
+    from the COPY (so writes never reach the caller's dir, and a second launch
+    gets a different copy — persistence is silently lost). Its one escape hatch
+    (profile.py: `if 'browser-use-user-data-dir-' in user_data_str: return`) is a
+    path already containing that literal, which it treats as "already temp, use
+    in place" — so we name the dir with that sentinel. browser-use never
+    registers this in-place dir for cleanup (only dirs it itself mkdtemp's during
+    launch retries are removed), so it survives session stop for reuse.
+    """
+    return tempfile.mkdtemp(prefix=f"browser-use-user-data-dir-{label}-")
+
+
 async def launch_with_extension(
     dist: str | os.PathLike = PROD_DIST,
     headless: bool | str = "new",
@@ -295,6 +336,10 @@ async def launch_with_extension(
 ) -> LaunchHandle:
     """Launch browser-use Chromium with the prod extension loaded and return a
     handle (session + a CDP client on the browser endpoint).
+
+    Pass `user_data_dir` for a PERSISTENT profile (vault + identity survive a
+    restart). Use create_persistent_profile_dir() to mint one — a plain path
+    gets copy-to-temp'd by browser-use and won't actually persist (see helper).
 
     Caller is responsible for `await handle.session.stop()` and
     `await handle.cdp.close()`.

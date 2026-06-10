@@ -9,7 +9,7 @@
   },
   "dependencies": {
     "@agiterra/wallet-extension-core": "workspace:*",
-    "@agiterra/wallet-tools": "agiterra/wallet-tools#v0.2.0"
+    "@agiterra/wallet-tools": "agiterra/wallet-tools#v0.3.0"
   },
   "license": "MIT",
   "author": "Tim Garthwaite <https://github.com/mividtim>"

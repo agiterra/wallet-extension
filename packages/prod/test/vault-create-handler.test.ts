@@ -1,0 +1,155 @@
+/**
+ * VaultCreateHandler (ENG-3313): per-key write-path + create idempotency.
+ * Covers the behaviors that the browser-use FV can't prove deterministically —
+ * the synchronous in-flight guard's race-window closure, the persisted
+ * already-handled skip, the per-key directory write, and the name-conflict path.
+ * Mocks the Wire connection + directory via the handler's narrow interfaces and
+ * stubs chrome.storage; the EOA crypto (wallet-tools) runs for real.
+ */
+import { test, expect, beforeEach } from "bun:test";
+import {
+  VaultCreateHandler,
+  type CreateHandlerConnection,
+  type CreateHandlerDirectory,
+} from "../src/vault-create-handler.js";
+import { getVault, markCreateProcessed } from "@agiterra/wallet-extension-core";
+import { walletSettingKey } from "@agiterra/wallet-tools/directory";
+import type { WalletMeta } from "@agiterra/wallet-tools";
+import { meta } from "./fixtures.js";
+
+let local: Record<string, unknown> = {};
+let session: Record<string, unknown> = {};
+
+const chromeStub = {
+  storage: {
+    local: {
+      get: async (keys: string | string[]) =>
+        Array.isArray(keys) ? Object.fromEntries(keys.map((k) => [k, local[k]])) : { [keys]: local[keys] },
+      set: async (obj: Record<string, unknown>) => { Object.assign(local, obj); },
+    },
+    session: {
+      get: async (key: string) => ({ [key]: session[key] }),
+      set: async (obj: Record<string, unknown>) => { Object.assign(session, obj); },
+    },
+  },
+};
+// A full chrome typing is huge; a test double necessarily stands in via a cast.
+globalThis.chrome = chromeStub as unknown as typeof chrome;
+
+beforeEach(() => { local = {}; session = {}; });
+
+function setup(dirEntries: Record<string, WalletMeta> = {}) {
+  const calls = {
+    setPluginSetting: [] as Array<{ namespace: string; key: string; value: unknown }>,
+    publish: [] as Array<{ topic: string; dest?: string }>,
+  };
+  const connection: CreateHandlerConnection = {
+    onEvent: () => () => {},
+    setPluginSetting: async (namespace, key, value) => { calls.setPluginSetting.push({ namespace, key, value }); },
+    publish: async (topic, _payload, dest) => { calls.publish.push({ topic, dest }); return { seq: 1 }; },
+  };
+  const directory: CreateHandlerDirectory = { all: () => dirEntries, namespace: "wallet-vault" };
+  const handler = new VaultCreateHandler(connection, directory);
+  return { handler, calls };
+}
+
+test("normal create persists the wallet, writes its per-key directory entry, and replies", async () => {
+  const { handler, calls } = setup();
+  await handler.handleCreate({ request_id: "r1", name: "alpha" }, "agent-x");
+  const vault = await getVault();
+  expect(vault.length).toBe(1);
+  expect(vault[0].name).toBe("alpha");
+  expect(calls.setPluginSetting.length).toBe(1);
+  expect(calls.setPluginSetting[0].key).toBe(walletSettingKey(vault[0].address));
+  expect(calls.publish.length).toBe(1);
+});
+
+test("a replay of an already-handled request_id is skipped (idempotency, even with a stale directory)", async () => {
+  const { handler, calls } = setup();
+  await handler.handleCreate({ request_id: "r1", name: "alpha" }, "agent-x");
+  // the mock directory never reflects the new wallet, so only the persisted
+  // processed-set can stop the re-mint
+  await handler.handleCreate({ request_id: "r1", name: "alpha" }, "agent-x");
+  expect((await getVault()).length).toBe(1);
+  expect(calls.setPluginSetting.length).toBe(1);
+  // the skipped replay published nothing extra
+  expect(calls.publish.length).toBe(1);
+});
+
+test("a request_id already in the persisted set is skipped (no vault write, no reply)", async () => {
+  const { handler, calls } = setup();
+  // dedup key is `${sourceAgent}:${request_id}`
+  await markCreateProcessed("agent-x:r1");
+  await handler.handleCreate({ request_id: "r1", name: "alpha" }, "agent-x");
+  expect((await getVault()).length).toBe(0);
+  expect(calls.setPluginSetting.length).toBe(0);
+  expect(calls.publish.length).toBe(0);
+});
+
+test("two concurrent duplicates of one request_id mint once (serialized handling)", async () => {
+  const { handler, calls } = setup();
+  const req = { request_id: "r1", name: "alpha" };
+  // fire twice before the first resolves — handleCreate serializes through `tail`,
+  // so the second runs only after the first marks the request handled and is
+  // skipped by isCreateProcessed (no double mint, no second publish)
+  await Promise.all([handler.handleCreate(req, "agent-x"), handler.handleCreate(req, "agent-x")]);
+  expect((await getVault()).length).toBe(1);
+  expect(calls.setPluginSetting.length).toBe(1);
+  expect(calls.publish.length).toBe(1);
+});
+
+test("two DISTINCT request_ids fired concurrently both persist, and neither re-mints on replay", async () => {
+  const { handler, calls } = setup();
+  // fire-and-forget both before either completes. The processed-set + vault are
+  // non-atomic chrome.storage read-modify-writes; without serialization the two
+  // interleave and one request_id's update is lost (re-minted on the replay below).
+  await Promise.all([
+    handler.handleCreate({ request_id: "r1", name: "alpha" }, "agent-x"),
+    handler.handleCreate({ request_id: "r2", name: "beta" }, "agent-x"),
+  ]);
+  expect((await getVault()).length).toBe(2);
+  expect(calls.setPluginSetting.length).toBe(2);
+  // replay both — if either id was lost in the RMW it would be re-minted here
+  await handler.handleCreate({ request_id: "r1", name: "alpha" }, "agent-x");
+  await handler.handleCreate({ request_id: "r2", name: "beta" }, "agent-x");
+  expect((await getVault()).length).toBe(2);
+});
+
+test("the same request_id from a DIFFERENT agent is NOT shadowed (dedup is per-agent)", async () => {
+  const { handler } = setup();
+  await handler.handleCreate({ request_id: "r1", name: "alpha" }, "agent-x");
+  await handler.handleCreate({ request_id: "r1", name: "beta" }, "agent-y");
+  expect((await getVault()).length).toBe(2);
+});
+
+test("name conflict for the same creator -> error reply, no vault write", async () => {
+  const addr = "0x" + "a".repeat(40);
+  const { handler, calls } = setup({ [addr]: meta("alpha", "agent-x") });
+  await handler.handleCreate({ request_id: "r2", name: "alpha" }, "agent-x");
+  expect((await getVault()).length).toBe(0);
+  expect(calls.setPluginSetting.length).toBe(0);
+  // respondError published
+  expect(calls.publish.length).toBe(1);
+});
+
+test("a post-commit storage failure (idempotency mark) never replies ok:false for a created wallet", async () => {
+  // Fail only the processed-creates write (markCreateProcessed), simulating
+  // storage teardown on a persistent-profile restart AFTER setVault commits the
+  // wallet. The wallet IS created, so this must be swallowed, not bubbled to an
+  // ok:false reply.
+  const origSet = chromeStub.storage.local.set;
+  chromeStub.storage.local.set = async (obj: Record<string, unknown>) => {
+    if ("agiterra-wallet-processed-creates" in obj) throw new Error("storage teardown");
+    Object.assign(local, obj);
+  };
+  try {
+    const { handler, calls } = setup();
+    await handler.handleCreate({ request_id: "r1", name: "alpha" }, "agent-x");
+    // committed by set #1
+    expect((await getVault()).length).toBe(1);
+    // no false ok:false error reply
+    expect(calls.publish.length).toBe(0);
+  } finally {
+    chromeStub.storage.local.set = origSet;
+  }
+});
