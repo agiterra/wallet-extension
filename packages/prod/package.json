@@ -1,6 +1,6 @@
 {
   "name": "@agiterra/wallet-extension",
-  "version": "0.4.0-dev.0",
+  "version": "0.4.1-dev.0",
   "description": "Chrome extension for agent-driven dApp wallet interactions. Multi-wallet vault, Wire-mediated signing (with manual + local-RPC fallbacks), EIP-1193 surface.",
   "type": "module",
   "scripts": {

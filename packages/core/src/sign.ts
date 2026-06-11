@@ -164,7 +164,16 @@ async function buildAndSignTx(
 
   // EIP-1559 tx payload: [chainId, nonce, maxPriority, maxFee, gasLimit, to, value, data, accessList]
   const toBytes = tx.to ? hexToBytes(tx.to) : new Uint8Array(0);
-  const valueBytes = toRlpBytes(tx.value ?? 0);
+  // value is an INTEGER field — must be canonical minimal big-endian (zero =
+  // empty string → RLP 0x80). dApps send value as a hex string ("0x0" for the
+  // ubiquitous ERC-20 approve/transfer where no ETH moves); routing that
+  // through toRlpBytes's string branch (hexToBytes) treated it as a BYTE
+  // string → a literal 0x00 byte, which geth rejects at decode as a
+  // non-canonical integer ("failed to decode signed transaction", -32602).
+  // Go through BigInt → minimal. (data stays a byte string — 0x00 calldata is
+  // legitimately one zero byte, not an integer.)
+  const valueInt = tx.value == null || tx.value === "0x" || tx.value === "" ? 0n : BigInt(tx.value);
+  const valueBytes = toRlpBytes(valueInt);
   const dataBytes = toRlpBytes(tx.data ?? "0x");
   const fields = [
     toRlpBytes(chainId),
@@ -192,11 +201,16 @@ async function buildAndSignTx(
     throw new Error(`unexpected y_parity ${yParity} (signDigest returned v=${sig.v})`);
   }
 
+  // r and s are also INTEGER fields in the EIP-2718 envelope — geth decodes
+  // them as big.Int and requires canonical form (no leading zero byte).
+  // signDigest returns fixed-width 32-byte hex, so a signature whose r or s
+  // has a leading zero byte (~1/256 each) would serialize non-canonically and
+  // fail decode intermittently. Route through BigInt → minimal, same as value.
   const signedFields = [
     ...fields,
     toRlpBytes(BigInt(yParity)),
-    hexToBytes(sig.r),
-    hexToBytes(sig.s),
+    toRlpBytes(BigInt(sig.r)),
+    toRlpBytes(BigInt(sig.s)),
   ];
   const signedRlp = rlpEncode(signedFields);
   const signedEnv = concatBytes(new Uint8Array([0x02]), signedRlp);
