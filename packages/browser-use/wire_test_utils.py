@@ -167,3 +167,25 @@ async def bind_and_sign(h, me, key, wire_url, vault_id, sid, tab_id, addr, msg, 
     sig = await task
     assert sig.get("ok"), f"personal_sign failed: {sig}"
     return Account.recover_message(encode_defunct(text=msg), signature=sig["result"])
+
+
+async def bind_and_reject(h, me, key, wire_url, vault_id, sid, tab_id, addr, msg, code, message, data=None, tries=5):
+    """Mirror of bind_and_sign for the ERROR PATH: bind tab_id -> addr, drive
+    personal_sign, capture its request_id from the Wire DB, then reject it with a
+    CUSTOM JSON-RPC error (the FV Chrome MCP + embedded wallets cannot do).
+    Returns the page-observed error dict ({code, message, ...}) so the caller can
+    assert the exact custom error surfaced to the dApp. Raises if the page
+    resolves instead of rejecting."""
+    for _ in range(tries):
+        wa.wallet_use(wire_url, me, key, vault_id, tab_id, addr)
+        await asyncio.sleep(1.0)
+    base = max_seq()
+    task = asyncio.create_task(h.cdp.eth_request(sid, "personal_sign", [msg, addr]))
+    _, req_id = await next_sign_request(me, base)
+    if not req_id:
+        task.cancel()
+        raise AssertionError(f"no sign.request seen (addr={addr})")
+    wa.wallet_reject_with_error(wire_url, me, key, vault_id, req_id, code, message, data)
+    res = await task
+    assert not res.get("ok"), f"expected a rejection but personal_sign resolved: {res}"
+    return res.get("error") or {}

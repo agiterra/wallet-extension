@@ -142,6 +142,29 @@ def wallet_approve(wire_url, agent_id, priv, vault_id, request_id) -> dict:
                    {"request_id": request_id, "action": "approve"})
 
 
+def wallet_refuse(wire_url, agent_id, priv, vault_id, request_id, reason=None) -> dict:
+    """Refuse a pending sign request → the dApp sees the standard EIP-1193 4001
+    'User rejected the request.' sentinel. `reason` rides along for audit only
+    (the page never sees it). Mirrors wallet-claude-code's wallet_refuse —
+    response shape SignResponseRefuse (server.ts)."""
+    payload = {"request_id": request_id, "action": "refuse"}
+    if reason is not None:
+        payload["reason"] = reason
+    return publish(wire_url, agent_id, priv, vault_id, "wallet.sign.response", payload)
+
+
+def wallet_reject_with_error(wire_url, agent_id, priv, vault_id, request_id, code, message, data=None) -> dict:
+    """Reject a pending sign request with a CUSTOM JSON-RPC error — the page's
+    request() promise rejects with exactly {code, message, data?}. This is the
+    error-path FV that Chrome MCP + embedded (Dynamic WaaS) wallets cannot do.
+    Mirrors wallet-claude-code's wallet_reject_with_error — response shape
+    SignResponseReject (action:'reject_with_error'; server.ts)."""
+    payload = {"request_id": request_id, "action": "reject_with_error", "code": int(code), "message": message}
+    if data is not None:
+        payload["data"] = data
+    return publish(wire_url, agent_id, priv, vault_id, "wallet.sign.response", payload)
+
+
 _WALLET_KEY_PREFIX = "wallet:"
 _WALLETS_LEGACY_KEY = "wallets"
 _ADDR_RE = re.compile(r"^0x[0-9a-f]{40}$")

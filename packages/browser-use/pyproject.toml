@@ -9,6 +9,16 @@ dependencies = [
   "websockets>=12",
 ]
 
+# The Wire-driving sign harness (wire_admin.py / wire_test_utils.py /
+# e2e_*.py / pertab_test.py) needs an Ed25519 signer and eth signature
+# recovery. launcher.py itself stays thin (deps above); install the extra to
+# run the e2e/sign tests:  pip install -e '.[test]'
+[project.optional-dependencies]
+test = [
+  "eth-account>=0.11",
+  "cryptography>=42",
+]
+
 [project.urls]
 repository = "https://github.com/agiterra/wallet-extension"
 
