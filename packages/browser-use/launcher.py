@@ -247,6 +247,12 @@ VAULT_ID_KEY = "agiterra-wallet-extension-vault-id"
 WIRE_URL_KEY = "agiterra-wallet-extension-wire-url"
 DECIDER_TARGET_KEY = "agiterra-wallet-extension-decider-target"
 VAULT_KEY = "agiterra-wallet-vault"  # the encrypted wallet entries (vault-store.ts)
+# Per-chain RPC URL map { "<chainId>": "https://..." }. eth_sendTransaction needs
+# it to broadcast (core/src/rpc.ts sendRawTransaction → getRpcUrl throws if unset);
+# personal_sign / eth_signTransaction don't. Nothing seeds a default, so a send-tx
+# FV must provision it (ENG-3340: an unset map = "signs but never broadcasts").
+RPC_URLS_KEY = "agiterra-wallet-extension-rpc-urls"
+SEPOLIA_RPC = "https://ethereum-sepolia-rpc.publicnode.com"  # public, no key
 
 
 async def provision_vault_identity(
@@ -255,22 +261,29 @@ async def provision_vault_identity(
     vault_id: str,
     wire_url: str | None = None,
     decider_target: str | None = None,
+    rpc_urls: dict | None = None,
 ) -> dict:
     """Make a freshly-launched instance register under its OWN Wire id.
 
     The SW mints its identity at boot, BEFORE we can seed anything — and on a
     fresh profile that mint uses the default id 'wallet-vault'. So we: seed the
-    vault id (+ decider-target), DELETE the default-minted identity, reload the
-    SW (re-mints under the seeded id), and ONLY THEN seed the wire-url — because
-    the connect loop is inert until wire-url is set (wire-connection.ts), this
-    ordering guarantees the default 'wallet-vault' id never touches Wire (no 409
-    collision with a live Chrome wallet-vault).
+    vault id (+ decider-target, + rpc-urls), DELETE the default-minted identity,
+    reload the SW (re-mints under the seeded id), and ONLY THEN seed the wire-url
+    — because the connect loop is inert until wire-url is set
+    (wire-connection.ts), this ordering guarantees the default 'wallet-vault' id
+    never touches Wire (no 409 collision with a live Chrome wallet-vault).
+
+    Pass `rpc_urls` ({ "<chainId>": url }) to enable eth_sendTransaction — the
+    broadcast (eth_sendRawTransaction) throws without a per-chain RPC URL.
+    chrome.storage persists across the reload, so seeding it here is durable.
 
     Returns the stored identity ({agentId, ...}) after re-mint.
     """
     seed: dict = {VAULT_ID_KEY: vault_id}
     if decider_target:
         seed[DECIDER_TARGET_KEY] = decider_target
+    if rpc_urls:
+        seed[RPC_URLS_KEY] = rpc_urls
     await cdp.seed_storage(ext_id, seed)
     await cdp.remove_storage(ext_id, [WIRE_IDENTITY_KEY])
     new_ext_id = await cdp.reload_extension(ext_id)

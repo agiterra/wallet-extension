@@ -115,11 +115,12 @@ async def wait_connected(agent: str, timeout_s: float = 25.0) -> bool:
     return False
 
 
-async def provision_register_connect(h, wire_url, me, key, vault_id, display_name):
+async def provision_register_connect(h, wire_url, me, key, vault_id, display_name, rpc_urls=None):
     """Provision the launched instance's Wire identity under `vault_id`, sponsor-
     register it (signing as `me`), seed the wire-url, and wait for it to connect.
+    Pass `rpc_urls` ({ "<chainId>": url }) to enable eth_sendTransaction broadcast.
     Returns the provisioned identity dict."""
-    ident = await provision_vault_identity(h.cdp, h.extension_id, vault_id, decider_target=me)
+    ident = await provision_vault_identity(h.cdp, h.extension_id, vault_id, decider_target=me, rpc_urls=rpc_urls)
     pub = wa.derive_pubkey_b64(ident["privateKeyB64"])
     status = wa.sponsor_register(wire_url, me, key, vault_id, pub, display_name, force_rotate=True)["status"]
     assert status in (200, 201), f"sponsor_register({vault_id}) failed: {status}"
