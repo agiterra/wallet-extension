@@ -72,6 +72,17 @@ export class TabClaims {
         event.topic === `webhook.${WALLET_VAULT_TAB_RELEASE}`;
       if (!isClaim && !isRelease) return;
 
+      // Claim/release are IMPERATIVES: the wire replays recent events on SSE
+      // reconnect (at-least-once delivery), and re-applying an old claim on a
+      // fresh boot would re-create acks the boot sweep just deleted — or bind
+      // a re-minted tab id to a stale wallet. Live callers (wallet_use) poll
+      // for the ack within 15s, so a 60s freshness window loses nothing.
+      const age = Date.now() - event.created_at;
+      if (age > 60_000) {
+        console.log(`[wallet-vault] ignoring stale ${event.topic} (seq ${event.seq}, age ${Math.round(age / 1000)}s) — SSE replay`);
+        return;
+      }
+
       const raw = event.payload as { payload?: unknown; tab_id?: unknown } | undefined;
       const body = raw && typeof (raw as { tab_id?: unknown }).tab_id === "string"
         ? raw

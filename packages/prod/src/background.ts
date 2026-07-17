@@ -84,7 +84,10 @@ const DECIDER_TARGET_KEY = "agiterra-wallet-extension-decider-target";
     } catch (e) {
       console.error("[wallet-vault] ack-key sweep failed:", e);
     }
-  })();
+  })().catch(async (e: Error) => {
+    console.error("[wallet-vault] boot block failed:", e);
+    await chrome.storage.local.set({ "debug-boot-error": { at: Date.now(), error: String(e && e.stack || e) } });
+  });
 
   function makeDecider(config: DeciderConfig): Decider {
     switch (config.mode) {
