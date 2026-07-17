@@ -94,6 +94,13 @@ export class WalletDirectory {
     });
   }
 
+  /** Keys of the raw namespace listing from the last refresh(). Lets boot-time
+   *  sweeps (e.g. stale tab_claim ack cleanup) see non-directory keys without
+   *  a second namespace GET. Not live-updated for non-directory keys. */
+  rawKeys(): string[] {
+    return Object.keys(this.rawSettings);
+  }
+
   /** One-shot initial pull from Wire on boot. Subsequent updates come via SSE. */
   async refresh(wireUrl: string): Promise<void> {
     // Whole-namespace GET → Record<key, value>. Dual-read: mergeWalletDirectory

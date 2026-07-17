@@ -91,6 +91,23 @@ export class WireConnection {
   }
 
   /**
+   * Delete a plugin_settings key. Same auth/namespace rule as
+   * setPluginSetting. Deleting an already-absent key is not an error.
+   */
+  async deletePluginSetting(namespace: string, key: string): Promise<void> {
+    if (!this.wireUrl) await this.resolveWireUrl();
+    if (!this.wireUrl) throw new Error("Wire URL not configured");
+    const headers = await this.jwtHeaders("");
+    const res = await fetch(`${this.wireUrl}/plugin_settings/${namespace}/${key}`, {
+      method: "DELETE",
+      headers,
+    });
+    if (!res.ok) {
+      throw new Error(`plugin_settings DELETE failed (${res.status}): ${await res.text().catch(() => "")}`);
+    }
+  }
+
+  /**
    * Publish a JWT-signed message to a topic. `dest` (optional) sends it
    * directly to a single agent; omitted = broadcast.
    */

@@ -47,7 +47,13 @@ const DECIDER_TARGET_KEY = "agiterra-wallet-extension-decider-target";
   // (the wire server only lets an agent write its own namespace). Default
   // "wallet-vault" installs are unaffected.
   const directory = new WalletDirectory(connection, identity.agentId);
-  const tabClaims = new TabClaims(connection, directory);
+  // vaultHas: a claim is only accepted for wallets this instance can SIGN for
+  // (present in the local vault) — directory-only wallets refuse loudly instead
+  // of silently falling back to first-wallet at request time.
+  const tabClaims = new TabClaims(connection, directory, async (addr) => {
+    const vault = await getVault();
+    return vault.some((w) => w.address.toLowerCase() === addr);
+  });
   // Constructed for side-effects (subscribes to wallet.vault.create_request on the connection).
   void new VaultCreateHandler(connection, directory);
 
@@ -68,7 +74,19 @@ const DECIDER_TARGET_KEY = "agiterra-wallet-extension-decider-target";
       directory,
       (stored[DECIDER_TARGET_KEY] as string | undefined)?.trim() ?? null,
     );
-  })();
+    // Ack-key sweep: refusal acks have no claim entry, so the claims-only
+    // prune never removes them — sweep any tab_claim:<id> keys left in the
+    // namespace for tabs that no longer exist.
+    try {
+      const tabs = await chrome.tabs.query({});
+      const ackKeys = directory.rawKeys().filter((k) => k.startsWith("tab_claim:"));
+      await tabClaims.pruneStale(new Set(tabs.map((t) => String(t.id))), ackKeys);
+    } catch (e) {
+      console.error("[wallet-vault] ack-key sweep failed:", e);
+    }
+  })().catch((e: Error) => {
+    console.error("[wallet-vault] boot block failed:", e);
+  });
 
   function makeDecider(config: DeciderConfig): Decider {
     switch (config.mode) {
@@ -104,6 +122,18 @@ const DECIDER_TARGET_KEY = "agiterra-wallet-extension-decider-target";
   };
 
   installRequestHandler(makeDecider, tabResolver, identity.agentId);
+
+  // Claim lifecycle (AGI-16): release the binding when its tab closes, and
+  // prune claims whose tab no longer exists (tab ids re-mint on browser
+  // restart — a stale claim must not bind an unrelated new tab). The prune
+  // runs on every SW wake; it is idempotent and leaves live tabs untouched.
+  chrome.tabs.onRemoved.addListener((tabId) => {
+    void tabClaims.releaseTab(String(tabId), "tab closed");
+  });
+  void chrome.tabs
+    .query({})
+    .then((tabs) => tabClaims.pruneStale(new Set(tabs.map((t) => String(t.id)))))
+    .catch((e: Error) => console.error("[wallet-vault] stale-claim prune failed:", e));
   console.log(`[wallet-vault] background service worker started, prod variant, v0.4.0-dev (identity: ${identity.agentId})`);
 })().catch((e: Error) => {
   console.error("[wallet-vault] boot failed:", e);
