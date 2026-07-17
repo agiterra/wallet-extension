@@ -110,6 +110,18 @@ export class TabClaims {
       });
     };
 
+    // The tab must actually exist HERE. This is the original wallet_use
+    // failure mode: a Playwright page INDEX (0, 1, …) isn't a chrome.tabs id,
+    // and the old code recorded a claim for a tab that would never match.
+    const tabIdNum = Number(req.tab_id);
+    const tab = Number.isInteger(tabIdNum) && tabIdNum >= 0
+      ? await chrome.tabs.get(tabIdNum).catch(() => null)
+      : null;
+    if (!tab) {
+      await refuse(`tab '${req.tab_id}' does not exist in this browser — pass the REAL chrome.tabs id (in-page: window.ethereum.request({method:'agiterra_getTabId'})); a Playwright page index is not a tab id`);
+      return;
+    }
+
     if (!this.directory.get(addr)) {
       await refuse(`unknown wallet ${addr} (not in directory)`);
       return;
