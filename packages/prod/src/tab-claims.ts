@@ -181,13 +181,22 @@ export class TabClaims {
     if (had) console.log(`[wallet-vault] tab ${tabId} claim released (${why})`);
   }
 
-  /** Drop claims whose tab no longer exists. Safe to run on every SW
-   *  wake — claims for live tabs are untouched. */
-  async pruneStale(liveTabIds: Set<string>): Promise<void> {
+  /** Drop claims whose tab no longer exists, and delete leftover ack keys
+   *  (e.g. refusal acks, which have no claim entry) for dead tabs. Safe to
+   *  run on every SW wake — live tabs are untouched. */
+  async pruneStale(liveTabIds: Set<string>, ackSettingKeys: string[] = []): Promise<void> {
     await this.load();
     for (const tabId of Object.keys(this.claims)) {
       if (!liveTabIds.has(tabId)) {
         await this.releaseTab(tabId, "stale — tab no longer exists");
+      }
+    }
+    const prefix = tabClaimSettingKey("");
+    for (const key of ackSettingKeys) {
+      if (!key.startsWith(prefix)) continue;
+      const tabId = key.slice(prefix.length);
+      if (!liveTabIds.has(tabId) && !this.claims[tabId]) {
+        await this.deleteAck(tabId);
       }
     }
   }

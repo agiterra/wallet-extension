@@ -74,6 +74,16 @@ const DECIDER_TARGET_KEY = "agiterra-wallet-extension-decider-target";
       directory,
       (stored[DECIDER_TARGET_KEY] as string | undefined)?.trim() ?? null,
     );
+    // Ack-key sweep: refusal acks have no claim entry, so the claims-only
+    // prune never removes them — sweep any tab_claim:<id> keys left in the
+    // namespace for tabs that no longer exist.
+    try {
+      const tabs = await chrome.tabs.query({});
+      const ackKeys = directory.rawKeys().filter((k) => k.startsWith("tab_claim:"));
+      await tabClaims.pruneStale(new Set(tabs.map((t) => String(t.id))), ackKeys);
+    } catch (e) {
+      console.error("[wallet-vault] ack-key sweep failed:", e);
+    }
   })();
 
   function makeDecider(config: DeciderConfig): Decider {
