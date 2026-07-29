@@ -14,6 +14,7 @@ import {
   getVault,
   unlockPrivateKey,
   bootstrapDevWalletIfEmpty,
+  bootstrapDefaultDevChainRpcUrl,
   getActiveChainId,
   setActiveChainId,
 } from "./vault-store.js";
@@ -75,10 +76,24 @@ export function installRequestHandler(
   // the prod entry passes its configurable vault id (see wire-identity.ts).
   source: string = "wallet-vault",
 ): void {
+  const startupBootstrap = (async () => {
+    try {
+      await bootstrapDefaultDevChainRpcUrl();
+    } catch (e) {
+      console.error("[wallet-vault] RPC bootstrap failed:", e);
+    }
+    try {
+      await bootstrapDevWalletIfEmpty();
+    } catch (e) {
+      console.error("[wallet-vault] bootstrap failed:", e);
+    }
+  })();
+
   chrome.runtime.onMessage.addListener(
     (msg: IncomingRequest, sender, sendResponse) => {
       if (msg.type !== "wallet/request") return false;
-      void handle(msg, sender, makeDecider, tabResolver, source)
+      void startupBootstrap
+        .then(() => handle(msg, sender, makeDecider, tabResolver, source))
         .then(sendResponse)
         .catch((e: Error & { code?: number }) => {
           console.error("[wallet-vault] handler crashed:", e);
@@ -87,14 +102,6 @@ export function installRequestHandler(
       return true; // async response
     },
   );
-
-  (async () => {
-    try {
-      await bootstrapDevWalletIfEmpty();
-    } catch (e) {
-      console.error("[wallet-vault] bootstrap failed:", e);
-    }
-  })();
 }
 
 /** ENG-3313: the caller's OWN Chrome tab id (what the SW stamps on sign
