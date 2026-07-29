@@ -14,6 +14,7 @@ import {
   getVault,
   unlockPrivateKey,
   bootstrapDevWalletIfEmpty,
+  bootstrapDefaultDevChainRpcUrl,
   getActiveChainId,
   setActiveChainId,
 } from "./vault-store.js";
@@ -89,6 +90,11 @@ export function installRequestHandler(
   );
 
   (async () => {
+    try {
+      await bootstrapDefaultDevChainRpcUrl();
+    } catch (e) {
+      console.error("[wallet-vault] RPC bootstrap failed:", e);
+    }
     try {
       await bootstrapDevWalletIfEmpty();
     } catch (e) {

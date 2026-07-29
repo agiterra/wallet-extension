@@ -11,7 +11,7 @@
  * propagate to the caller, which surfaces them to the dApp.
  */
 
-const RPC_URLS_KEY = "agiterra-wallet-extension-rpc-urls";
+export const RPC_URLS_KEY = "agiterra-wallet-extension-rpc-urls";
 
 interface JsonRpcRequest {
   jsonrpc: "2.0";

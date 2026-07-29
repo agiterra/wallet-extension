@@ -5,7 +5,12 @@
  * wrappers around it are thin and exercised by the browser-use FV).
  */
 import { test, expect } from "bun:test";
-import { appendProcessedCreate } from "../src/vault-store.js";
+import {
+  appendProcessedCreate,
+  devChainId,
+  devChainRpcUrl,
+  withDefaultDevChainRpcUrl,
+} from "../src/vault-store.js";
 
 test("appendProcessedCreate appends a new request id", () => {
   expect(appendProcessedCreate([], "a")).toEqual(["a"]);
@@ -24,4 +29,18 @@ test("appendProcessedCreate grows up to `max` without trimming (boundary is > no
 
 test("appendProcessedCreate bounds the set to the most recent `max` (drops oldest)", () => {
   expect(appendProcessedCreate(["a", "b", "c"], "d", 3)).toEqual(["b", "c", "d"]);
+});
+
+test("withDefaultDevChainRpcUrl seeds Sepolia when no URL exists", () => {
+  expect(withDefaultDevChainRpcUrl({})).toEqual({
+    rpcUrls: { [String(devChainId())]: devChainRpcUrl() },
+    seeded: true,
+  });
+});
+
+test("withDefaultDevChainRpcUrl preserves an existing Sepolia URL", () => {
+  const existing = { [String(devChainId())]: "https://example.invalid/rpc" };
+  const result = withDefaultDevChainRpcUrl(existing);
+  expect(result).toEqual({ rpcUrls: existing, seeded: false });
+  expect(result.rpcUrls).toBe(existing);
 });
