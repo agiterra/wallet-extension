@@ -76,20 +76,7 @@ export function installRequestHandler(
   // the prod entry passes its configurable vault id (see wire-identity.ts).
   source: string = "wallet-vault",
 ): void {
-  chrome.runtime.onMessage.addListener(
-    (msg: IncomingRequest, sender, sendResponse) => {
-      if (msg.type !== "wallet/request") return false;
-      void handle(msg, sender, makeDecider, tabResolver, source)
-        .then(sendResponse)
-        .catch((e: Error & { code?: number }) => {
-          console.error("[wallet-vault] handler crashed:", e);
-          sendResponse({ error: { code: e.code ?? -32603, message: e.message ?? "Internal error" } });
-        });
-      return true; // async response
-    },
-  );
-
-  (async () => {
+  const startupBootstrap = (async () => {
     try {
       await bootstrapDefaultDevChainRpcUrl();
     } catch (e) {
@@ -101,6 +88,20 @@ export function installRequestHandler(
       console.error("[wallet-vault] bootstrap failed:", e);
     }
   })();
+
+  chrome.runtime.onMessage.addListener(
+    (msg: IncomingRequest, sender, sendResponse) => {
+      if (msg.type !== "wallet/request") return false;
+      void startupBootstrap
+        .then(() => handle(msg, sender, makeDecider, tabResolver, source))
+        .then(sendResponse)
+        .catch((e: Error & { code?: number }) => {
+          console.error("[wallet-vault] handler crashed:", e);
+          sendResponse({ error: { code: e.code ?? -32603, message: e.message ?? "Internal error" } });
+        });
+      return true; // async response
+    },
+  );
 }
 
 /** ENG-3313: the caller's OWN Chrome tab id (what the SW stamps on sign

@@ -44,3 +44,10 @@ test("withDefaultDevChainRpcUrl preserves an existing Sepolia URL", () => {
   expect(result).toEqual({ rpcUrls: existing, seeded: false });
   expect(result.rpcUrls).toBe(existing);
 });
+
+test("withDefaultDevChainRpcUrl does not re-seed after the one-time bootstrap marker", () => {
+  const existing = {};
+  const result = withDefaultDevChainRpcUrl(existing, true);
+  expect(result).toEqual({ rpcUrls: existing, seeded: false });
+  expect(result.rpcUrls).toBe(existing);
+});

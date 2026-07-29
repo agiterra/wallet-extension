@@ -24,6 +24,7 @@ const DEV_DECIDER_URL = "http://localhost:54321";
 const DEV_DECIDER_TOKEN = "dev-token-v0";
 const DEV_CHAIN_ID = 11155111; // Sepolia
 const DEV_CHAIN_RPC_URL = "https://ethereum-sepolia-rpc.publicnode.com";
+const DEV_CHAIN_RPC_BOOTSTRAPPED_KEY = "agiterra-wallet-extension-default-rpc-bootstrapped";
 
 export async function getVault(): Promise<WalletEntry[]> {
   const stored = await chrome.storage.local.get(VAULT_KEY);
@@ -132,7 +133,9 @@ export function devChainRpcUrl(): string {
 
 export function withDefaultDevChainRpcUrl(
   rpcUrls: Record<string, string>,
+  alreadyBootstrapped = false,
 ): { rpcUrls: Record<string, string>; seeded: boolean } {
+  if (alreadyBootstrapped) return { rpcUrls, seeded: false };
   const chainKey = String(DEV_CHAIN_ID);
   const existingUrl = rpcUrls[chainKey]?.trim();
   if (existingUrl) return { rpcUrls, seeded: false };
@@ -146,12 +149,16 @@ export function withDefaultDevChainRpcUrl(
 }
 
 export async function bootstrapDefaultDevChainRpcUrl(): Promise<boolean> {
-  const stored = await chrome.storage.local.get(RPC_URLS_KEY);
+  const stored = await chrome.storage.local.get([RPC_URLS_KEY, DEV_CHAIN_RPC_BOOTSTRAPPED_KEY]);
   const existing = (stored[RPC_URLS_KEY] as Record<string, string> | undefined) ?? {};
-  const { rpcUrls, seeded } = withDefaultDevChainRpcUrl(existing);
-  if (!seeded) return false;
-  await chrome.storage.local.set({ [RPC_URLS_KEY]: rpcUrls });
-  console.log("[wallet-vault] bootstrap: seeded Sepolia RPC URL", DEV_CHAIN_RPC_URL);
+  const alreadyBootstrapped = stored[DEV_CHAIN_RPC_BOOTSTRAPPED_KEY] === true;
+  const { rpcUrls, seeded } = withDefaultDevChainRpcUrl(existing, alreadyBootstrapped);
+  if (alreadyBootstrapped) return false;
+  await chrome.storage.local.set({
+    ...(seeded ? { [RPC_URLS_KEY]: rpcUrls } : {}),
+    [DEV_CHAIN_RPC_BOOTSTRAPPED_KEY]: true,
+  });
+  if (seeded) console.log("[wallet-vault] bootstrap: seeded Sepolia RPC URL", DEV_CHAIN_RPC_URL);
   return true;
 }
 
