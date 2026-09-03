@@ -142,6 +142,7 @@ export class WireConnection {
         await this.streamOnce();
         // Stream ended cleanly (server restart, etc.) — reconnect from scratch.
         this.sessionId = null;
+        this.stopHeartbeat();
         backoffMs = 1000;
       } catch (e) {
         const err = e as Error;
@@ -207,8 +208,35 @@ export class WireConnection {
     const data = (await res.json()) as { session_id: string };
     this.sessionId = data.session_id;
     console.log(`[wallet-vault] Wire connected: session=${this.sessionId}`);
+    this.startHeartbeat();
   }
 
+  // Session heartbeat (2026-09-03, fondant): the gateway marks a session stale after ~45 s without
+  // POST /agents/:id/sessions/:sid/heartbeat and then closes the stream; every other Wire client
+  // heartbeats, this one never did, so each extension instance cycled stale→reconnect every ~80 s
+  // and tab-claim/approve replies sent in the gap waited for the next reconnect.
+  private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+  private startHeartbeat(): void {
+    this.stopHeartbeat();
+    console.log("[wallet-vault] heartbeat armed (20 s)");
+    this.heartbeatTimer = setInterval(() => { void this.heartbeat(); }, 20_000);
+  }
+  private stopHeartbeat(): void {
+    if (this.heartbeatTimer) { clearInterval(this.heartbeatTimer); this.heartbeatTimer = null; }
+  }
+  private async heartbeat(): Promise<void> {
+    if (!this.sessionId || !this.wireUrl) return;
+    const body = "{}";
+    try {
+      const res = await fetch(`${this.wireUrl}/agents/${this.identity.agentId}/sessions/${this.sessionId}/heartbeat`, {
+        method: "POST", headers: await this.jwtHeaders(body), body,
+      });
+      if (!res.ok) console.warn(`[wallet-vault] heartbeat ${res.status}: ${(await res.text().catch(() => "")).slice(0, 120)}`);
+      if (res.status === 403 || res.status === 404) { this.sessionId = null; this.stopHeartbeat(); }
+    } catch (e) {
+      console.warn(`[wallet-vault] heartbeat failed: ${(e as Error).message}`);
+    }
+  }
   private async streamOnce(): Promise<void> {
     if (!this.sessionId) throw new Error("streamOnce called without session");
     const streamUrl = `${this.wireUrl}/agents/${this.identity.agentId}/stream?session_id=${this.sessionId}`;

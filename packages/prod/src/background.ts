@@ -35,6 +35,25 @@ import { VaultCreateHandler } from "./vault-create-handler.js";
 import { WireDecider } from "./decider-wire.js";
 
 const WIRE_URL_KEY = "agiterra-wallet-extension-wire-url";
+
+// MV3 keepalive (2026-09-03, fondant): in a headless fleet browser with no debugger attached, Chrome
+// suspends this service worker ~10 s after the last event, which closes the Wire SSE stream; the
+// gateway then marks the instance stale and every wallet_use/approve reply waits for the next boot
+// (~80 s cycle, measured on wallet-vault-mostacciolo). A periodic alarm is an event: it keeps the
+// worker alive while the stream is open and wakes it when it has been suspended. Registered
+// synchronously at top level so it is armed on every worker start.
+// Chrome resets the 30 s idle timer on every extension-API call; a 20 s interval from inside the
+// worker keeps it alive while the SSE read is in flight (an alarm alone, minimum 30 s, lost the race).
+setInterval(() => { void chrome.runtime.getPlatformInfo(); }, 20_000);
+try {
+  chrome.alarms.create("wire-keepalive", { periodInMinutes: 0.5 });
+  chrome.alarms.onAlarm.addListener((alarm) => {
+    if (alarm.name === "wire-keepalive") void chrome.storage.local.get(VAULT_ID_KEY_FOR_KEEPALIVE);
+  });
+} catch (e) {
+  console.warn("[wallet-vault] keepalive alarm not armed:", e);
+}
+const VAULT_ID_KEY_FOR_KEEPALIVE = "agiterra-wallet-extension-vault-id";
 const DECIDER_TARGET_KEY = "agiterra-wallet-extension-decider-target";
 
 (async () => {
