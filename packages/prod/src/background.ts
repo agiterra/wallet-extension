@@ -22,6 +22,7 @@ import {
   LocalRpcDecider,
   ManualDecider,
   getVault,
+  setVault,
   devChainId,
   type Decider,
 } from "@agiterra/wallet-extension-core";
@@ -56,6 +57,37 @@ try {
 const VAULT_ID_KEY_FOR_KEEPALIVE = "agiterra-wallet-extension-vault-id";
 const DECIDER_TARGET_KEY = "agiterra-wallet-extension-decider-target";
 
+// Fleet install marker (2026-09-04, fondant): a seeded decider-target means this
+// instance signs for a headless lane over the Wire. The core's bootstrap wallet
+// is created with the dev smoke-test decider {mode:"local-rpc", url:localhost:54321}
+// — nothing listens there on the fleet, so every SIWE personal_sign died with
+// "Decider error: Failed to fetch" (mostacciolo, 09-04 12:03Z) and no
+// wallet.sign.request ever reached the lane. Migrate such wallets to mode "wire"
+// at boot, and coerce at decide-time so the race with the async bootstrap
+// cannot reintroduce it.
+const DEV_DECIDER_URL_PREFIX = "http://localhost:54321";
+let fleetDeciderTarget: string | null = null;
+function isDevLocalRpc(d: DeciderConfig | undefined): boolean {
+  return !!d && d.mode === "local-rpc" && typeof d.url === "string" && d.url.startsWith(DEV_DECIDER_URL_PREFIX);
+}
+async function migrateDevDeciderToWire(): Promise<number> {
+  // The core bootstrap runs async on the same tick; give it a moment to write.
+  let vault = await getVault();
+  for (let i = 0; i < 20 && vault.length === 0; i++) {
+    await new Promise((r) => setTimeout(r, 250));
+    vault = await getVault();
+  }
+  let changed = 0;
+  for (const w of vault) {
+    if (isDevLocalRpc(w.decider)) { w.decider = { mode: "wire" }; changed++; }
+  }
+  if (changed > 0) {
+    await setVault(vault);
+    console.log(`[wallet-vault] fleet install: migrated ${changed} wallet(s) from the dev local-rpc decider to mode "wire"`);
+  }
+  return changed;
+}
+
 (async () => {
   const identity = await loadOrCreateIdentity();
   const connection = new WireConnection(identity);
@@ -81,6 +113,10 @@ const DECIDER_TARGET_KEY = "agiterra-wallet-extension-decider-target";
   void (async () => {
     const stored = await chrome.storage.local.get([WIRE_URL_KEY, DECIDER_TARGET_KEY]);
     const wireUrl = (stored[WIRE_URL_KEY] as string | undefined)?.replace(/\/$/, "");
+    fleetDeciderTarget = (stored[DECIDER_TARGET_KEY] as string | undefined)?.trim() || null;
+    if (fleetDeciderTarget) {
+      try { await migrateDevDeciderToWire(); } catch (e) { console.error("[wallet-vault] decider migration failed:", e); }
+    }
     if (!wireUrl) return;
     try {
       await directory.refresh(wireUrl);
@@ -108,6 +144,10 @@ const DECIDER_TARGET_KEY = "agiterra-wallet-extension-decider-target";
   });
 
   function makeDecider(config: DeciderConfig): Decider {
+    if (fleetDeciderTarget && isDevLocalRpc(config)) {
+      console.warn("[wallet-vault] fleet install: wallet still carries the dev local-rpc decider — routing over the Wire");
+      config = { mode: "wire" };
+    }
     switch (config.mode) {
       case "local-rpc":
         return new LocalRpcDecider(config.url, config.auth_token);
