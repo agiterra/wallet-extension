@@ -116,19 +116,30 @@ class CDP:
     async def close(self):
         await self._ws.close()
 
-    async def wait_for_extension_sw(self, timeout_s: float = 12.0) -> str | None:
+    async def wait_for_extension_sw(self, timeout_s: float = 12.0, expected_id: str | None = None) -> str | None:
         """Poll Target.getTargets for our extension's MV3 service worker.
-        Returns the chrome-extension://<id> origin, or None on timeout.
+        Returns the chrome-extension://<id> origin id, or None on timeout.
+
+        Prefer `expected_id` (our deterministic unpacked id) and return it the moment
+        it appears, so we never hand back Chrome's built-in component-extension SW by
+        mistake (ENG-4107: with the load-extension gate closed, the ONLY SW present was
+        a built-in one and this matched it silently). Fallback to the first chrome-extension
+        SW only on timeout, so a wrong `expected_id` can never regress below prior behavior.
         """
         deadline = timeout_s
+        fallback: str | None = None
         while deadline > 0:
             targets = (await self.call("Target.getTargets"))["targetInfos"]
             for t in targets:
                 if t["type"] == "service_worker" and t["url"].startswith("chrome-extension://"):
-                    return t["url"].split("/")[2]
+                    sid = t["url"].split("/")[2]
+                    if expected_id and sid == expected_id:
+                        return sid
+                    if fallback is None:
+                        fallback = sid
             await asyncio.sleep(0.5)
             deadline -= 0.5
-        return None
+        return fallback
 
     async def _sw_session(self, ext_id: str) -> str:
         targets = (await self.call("Target.getTargets"))["targetInfos"]
@@ -328,6 +339,13 @@ def create_persistent_profile_dir(label: str = "agiterra") -> str:
     return tempfile.mkdtemp(prefix=f"browser-use-user-data-dir-{label}-")
 
 
+def _unpacked_ext_id(dist_abspath: str) -> str:
+    """Chrome's deterministic id for an unpacked extension with NO manifest key:
+    first 16 bytes of sha256(absolute_path), each hex nibble mapped 0-f -> a-p."""
+    h = hashlib.sha256(dist_abspath.encode("utf-8")).hexdigest()[:32]
+    return "".join(chr(ord("a") + int(c, 16)) for c in h)
+
+
 async def launch_with_extension(
     dist: str | os.PathLike = PROD_DIST,
     headless: bool | str = "new",
@@ -355,7 +373,14 @@ async def launch_with_extension(
         headless=(headless if isinstance(headless, bool) else True),  # browser-use maps True→--headless=new
         executable_path=chrome_path,
         enable_default_extensions=False,  # else browser-use's --load-extension clobbers ours (last wins)
-        args=[f"--load-extension={dist}", f"--disable-extensions-except={dist}"],
+        args=[
+            f"--load-extension={dist}",
+            f"--disable-extensions-except={dist}",
+            # Chromium (CfT-1243) gates --load-extension behind a default-ON feature; without this the
+            # flag loads NOTHING and wait_for_extension_sw then matches Chrome's BUILT-IN component
+            # extension SW instead of ours (Brioche/acciuleddi ENG-4107, 2026-09-08). Re-enable the switch.
+            "--disable-features=DisableLoadExtensionCommandLineSwitch",
+        ],
     )
     if user_data_dir:
         profile_kwargs["user_data_dir"] = user_data_dir
@@ -363,7 +388,7 @@ async def launch_with_extension(
     session = BrowserSession(browser_profile=BrowserProfile(**profile_kwargs))
     await session.start()
     cdp = await CDP.connect(session.cdp_url)
-    ext_id = await cdp.wait_for_extension_sw()
+    ext_id = await cdp.wait_for_extension_sw(expected_id=_unpacked_ext_id(dist))
     if not ext_id:
         raise RuntimeError(
             "extension service worker did not appear — extension failed to load "
