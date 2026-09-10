@@ -47,18 +47,40 @@ export interface WireIdentity {
 
 export async function loadOrCreateIdentity(): Promise<WireIdentity> {
   const stored = await chrome.storage.local.get(STORAGE_KEY);
-  const existing = stored[STORAGE_KEY] as StoredIdentity | undefined;
+  let existing = stored[STORAGE_KEY] as StoredIdentity | undefined;
+
+  // The configured id is read on EVERY boot, not only on the mint path.
+  // AGI-130 (panadas, 2026-09-10): the service worker boots and mints under the
+  // default id before a lane's launcher has seeded VAULT_ID_KEY; on the next boot
+  // the stale "wallet-vault" identity was returned unconditionally and the lane's
+  // extension registered on the Wire as the SHARED vault. Reconcile instead: a
+  // stored identity whose agentId disagrees with an explicitly configured vault
+  // id is dropped and re-minted under the configured id. With no configured id
+  // the stored identity is kept whatever it says — never silently fall back to
+  // the shared default from a profile that once carried a per-lane id.
+  const vaultIdStored = await chrome.storage.local.get(VAULT_ID_KEY);
+  const configuredId = (vaultIdStored[VAULT_ID_KEY] as string | undefined)?.trim() || undefined;
+  if (existing && configuredId && existing.agentId !== configuredId) {
+    console.warn(
+      `[wallet-vault] stored Wire identity agent_id=${existing.agentId} disagrees with the configured vault id ` +
+      `${configuredId} — dropping it and minting a fresh identity under ${configuredId} (AGI-130; the old key is discarded, not reused)`,
+    );
+    await chrome.storage.local.remove(STORAGE_KEY);
+    existing = undefined;
+  }
+
   if (existing) {
     const privateKey = await importPrivateKey(existing.privateKeyB64);
     const publicKeyB64 = await derivePublicKeyB64(privateKey);
+    // Log the PUBLIC identity on every load so an operator can always re-enroll
+    // an existing install (the first-mint block below only fires once, before
+    // devtools is usually attached). Public key only — never the private half.
+    console.log(`[wallet-vault] Wire identity — agent_id: ${existing.agentId}  pubkey: ${publicKeyB64}`);
     return { agentId: existing.agentId, displayName: DISPLAY_NAME, publicKeyB64, privateKey };
   }
 
-  // First mint: pick the Wire agent id (default "wallet-vault"). A coexisting
-  // instance seeds VAULT_ID_KEY before first boot to claim its own id.
-  const vaultIdStored = await chrome.storage.local.get(VAULT_ID_KEY);
-  const agentId =
-    (vaultIdStored[VAULT_ID_KEY] as string | undefined)?.trim() || DEFAULT_AGENT_ID;
+  // First mint (or re-mint after a reconcile): the configured id, else the default.
+  const agentId = configuredId ?? DEFAULT_AGENT_ID;
 
   const kp = await generateKeyPair();
   const privateKeyB64 = await exportPrivateKeyB64(kp.privateKey);
