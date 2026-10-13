@@ -98,3 +98,43 @@ export async function getBlock(chainId: number, block: "latest" | "pending" = "l
 export async function sendRawTransaction(chainId: number, rawTxHex: string): Promise<string> {
   return rpcCall<string>(chainId, "eth_sendRawTransaction", [rawTxHex]);
 }
+
+/**
+ * Forward a dApp's read-only JSON-RPC call to the chain's RPC and return the
+ * node's answer unchanged, including its JSON-RPC error object, so a dApp sees
+ * the real code (e.g. 3 + revert data for a reverting eth_call) instead of a
+ * flattened message. Transport failures map to -32603.
+ */
+export async function rpcForward(
+  chainId: number,
+  method: string,
+  params: unknown[] = [],
+): Promise<{ result?: unknown; error?: { code: number; message: string; data?: unknown } }> {
+  let url: string;
+  try {
+    url = await getRpcUrl(chainId);
+  } catch (e) {
+    console.error(`[wallet-vault] RPC ${method}: no RPC URL for chain ${chainId}:`, e);
+    return { error: { code: -32603, message: (e as Error).message } };
+  }
+  const body: JsonRpcRequest = { jsonrpc: "2.0", id: nextId++, method, params };
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  } catch (e) {
+    console.error(`[wallet-vault] RPC ${method} fetch failed:`, e);
+    return { error: { code: -32603, message: `RPC ${method} fetch failed: ${(e as Error).message}` } };
+  }
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    console.error(`[wallet-vault] RPC ${method} HTTP ${res.status}: ${text}`);
+    return { error: { code: -32603, message: `RPC ${method} HTTP ${res.status}: ${text}` } };
+  }
+  const data = (await res.json()) as JsonRpcResponse;
+  if (data.error) return { error: data.error };
+  return { result: data.result };
+}

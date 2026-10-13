@@ -18,7 +18,31 @@ import {
   getActiveChainId,
   setActiveChainId,
 } from "./vault-store.js";
-import { setRpcUrl } from "./rpc.js";
+import { setRpcUrl, rpcForward } from "./rpc.js";
+
+/**
+ * Read-only chain methods the provider forwards to the active chain's RPC
+ * (0.5.1). Before this they returned -32601, so a dApp that reads through the
+ * injected provider (eth_call / eth_estimateGas / receipts) stalled before it
+ * ever sent a transaction. None of these signs or needs a wallet.
+ */
+export const READ_PASSTHROUGH_METHODS: ReadonlySet<string> = new Set([
+  "eth_blockNumber",
+  "eth_call",
+  "eth_estimateGas",
+  "eth_feeHistory",
+  "eth_gasPrice",
+  "eth_getBalance",
+  "eth_getBlockByHash",
+  "eth_getBlockByNumber",
+  "eth_getCode",
+  "eth_getLogs",
+  "eth_getStorageAt",
+  "eth_getTransactionByHash",
+  "eth_getTransactionCount",
+  "eth_getTransactionReceipt",
+  "eth_maxPriorityFeePerGas",
+]);
 
 /**
  * Resolve which wallet address is bound to a given browser tab.
@@ -128,6 +152,7 @@ async function handle(
   // Read-only methods that don't need a decider:
   if (method === "eth_chainId") return { result: "0x" + activeChain.toString(16) };
   if (method === "net_version") return { result: String(activeChain) };
+  if (READ_PASSTHROUGH_METHODS.has(method)) return rpcForward(activeChain, method, params);
 
   // Non-standard helper (ENG-3313): return THIS tab's Chrome tab id (the SW sees
   // it as sender.tab.id). A browser-use/CDP agent can't get the Chrome tab id

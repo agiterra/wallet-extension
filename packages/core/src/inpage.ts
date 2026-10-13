@@ -82,6 +82,12 @@ class AgiterraEthereumProvider {
     return this.removeListener(event, handler);
   }
 
+  // Not part of EIP-1193, but some dApp/connector code calls provider.disconnect()
+  // unguarded on logout or network-switch retry ("n.disconnect is not a function",
+  // sfv696 on test.fabrica.land, 2026-10-13). The wallet holds no session to tear
+  // down, so this is a no-op that lets the caller continue (0.5.1).
+  async disconnect(): Promise<void> {}
+
   _emit(event: string, ...args: unknown[]): void {
     const set = this.listeners.get(event);
     if (!set) return;
