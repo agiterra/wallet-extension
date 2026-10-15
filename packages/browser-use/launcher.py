@@ -51,6 +51,9 @@ def find_chrome_for_testing() -> str:
     # integers (e.g. chromium-999, chromium-1208), so sort NUMERICALLY — a
     # lexical sort would rank "999" above "1208".
     patterns = [
+        # Host-wide pinned Chrome for Testing, readable by every uid (ENG-4948, 2026-10-15). Without it the
+        # result depended on which uid had a Playwright cache: lanes found CfT 153, fondant/personas found none.
+        "/opt/agiterra/toolchains/chrome-for-testing/current/chrome-mac*/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing",
         # Playwright's bundled Chrome for Testing (what browser-use downloads)
         os.path.expanduser("~/Library/Caches/ms-playwright/chromium-*/chrome-mac*/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing"),
         os.path.expanduser("~/Library/Caches/ms-playwright/chromium-*/chrome-mac*/Chromium.app/Contents/MacOS/Chromium"),
