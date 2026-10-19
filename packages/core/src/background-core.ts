@@ -113,6 +113,20 @@ export function resolveOwnTabId(sender: { tab?: { id?: number } }): number | nul
   return sender.tab?.id ?? null;
 }
 
+/**
+ * Methods routed to the decider (Wire approval) before signing. Every member MUST have a case in
+ * signEip1193, or an approved request fails with -32601 after the agent already said yes (eth_sign did
+ * exactly that). eth_sign is deliberately absent: it signs an arbitrary 32-byte hash, which can be a
+ * transaction digest, so it is refused outright (falls through to "not supported") instead of being
+ * implemented. test/decision-methods.test.ts holds the invariant.
+ */
+export const DECISION_METHODS: ReadonlySet<string> = new Set([
+  "eth_sendTransaction",
+  "eth_signTransaction",
+  "personal_sign",
+  "eth_signTypedData_v4",
+]);
+
 async function handle(
   msg: IncomingRequest,
   sender: chrome.runtime.MessageSender,
@@ -193,15 +207,7 @@ async function handle(
     return { result: [wallet.address] };
   }
 
-  const needsDecision = new Set([
-    "eth_sendTransaction",
-    "eth_signTransaction",
-    "personal_sign",
-    "eth_sign",
-    "eth_signTypedData_v4",
-  ]);
-
-  if (needsDecision.has(method)) {
+  if (DECISION_METHODS.has(method)) {
     const signReq: SignRequest = {
       request_id: msg.request_id,
       source,
