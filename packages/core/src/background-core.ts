@@ -89,6 +89,13 @@ export function installRequestHandler(
     }
   })();
 
+  // ENG-5081: a closed tab's switch mode must not leak to a later tab that reuses its id.
+  chrome.tabs.onRemoved.addListener((tabId) => {
+    chrome.storage.session.remove(SWITCH_MODE_PREFIX + tabId).catch((e: Error) => {
+      console.error(`[wallet-vault] switch-mode cleanup for tab ${tabId} failed:`, e);
+    });
+  });
+
   chrome.runtime.onMessage.addListener(
     (msg: IncomingRequest, sender, sendResponse) => {
       if (msg.type !== "wallet/request") return false;
@@ -102,6 +109,30 @@ export function installRequestHandler(
       return true; // async response
     },
   );
+}
+
+/** ENG-5081 chain-switch test modes. "land" is the default and the only mode a
+ *  tab has until it calls agiterra_setSwitchMode. */
+export const SWITCH_MODES = ["land", "ack-no-land"] as const;
+export type SwitchMode = (typeof SWITCH_MODES)[number];
+const SWITCH_MODE_PREFIX = "agiterra.switchMode.";
+
+/** Accepts `{mode}` or a bare string; null for anything that is not a known mode. */
+export function parseSwitchMode(arg: unknown): SwitchMode | null {
+  const raw = typeof arg === "string" ? arg : (arg as { mode?: unknown } | null)?.mode;
+  return (SWITCH_MODES as readonly unknown[]).includes(raw) ? (raw as SwitchMode) : null;
+}
+
+async function getSwitchMode(tabId: number): Promise<SwitchMode> {
+  const key = SWITCH_MODE_PREFIX + tabId;
+  const stored = await chrome.storage.session.get(key);
+  return parseSwitchMode(stored[key]) ?? "land";
+}
+
+async function setSwitchMode(tabId: number, mode: SwitchMode): Promise<void> {
+  const key = SWITCH_MODE_PREFIX + tabId;
+  if (mode === "land") await chrome.storage.session.remove(key);
+  else await chrome.storage.session.set({ [key]: mode });
 }
 
 /** ENG-3313: the caller's OWN Chrome tab id (what the SW stamps on sign
@@ -150,6 +181,22 @@ async function handle(
   // only the caller's own tab id — a page can't enumerate others.
   if (method === "agiterra_getTabId") return { result: resolveOwnTabId(sender) };
 
+  // Non-standard test mode (ENG-5081): agiterra_setSwitchMode({mode}) sets how
+  // THIS tab's wallet_switchEthereumChain behaves. "land" (default) switches;
+  // "ack-no-land" returns success but leaves the chain unchanged, so a dApp's
+  // "switch acknowledged but never landed" path can be FV'd. Per tab, held in
+  // chrome.storage.session (survives SW suspension), dropped when the tab closes.
+  if (method === "agiterra_setSwitchMode") {
+    const tabId = resolveOwnTabId(sender);
+    if (tabId == null) return { error: { code: -32603, message: "agiterra_setSwitchMode: no tab context" } };
+    const mode = parseSwitchMode(params[0]);
+    if (!mode) {
+      return { error: { code: -32602, message: `agiterra_setSwitchMode: mode must be one of ${SWITCH_MODES.join(", ")}` } };
+    }
+    await setSwitchMode(tabId, mode);
+    return { result: mode };
+  }
+
   // Permission-introspection methods. Per EIP-2255, return capabilities for
   // accounts. We auto-approve since the tab claim / operator default is
   // already the consent surface.
@@ -165,6 +212,11 @@ async function handle(
     let id: number;
     try { id = parseChainIdParam(arg.chainId); } catch (e) {
       return { error: { code: -32602, message: (e as Error).message } };
+    }
+    const tabId = resolveOwnTabId(sender);
+    if (tabId != null && (await getSwitchMode(tabId)) === "ack-no-land") {
+      console.warn(`[wallet-vault] tab ${tabId} switch to ${id} acknowledged, NOT landed (ack-no-land test mode)`);
+      return { result: null };
     }
     await setActiveChainId(id);
     broadcastWalletEvent("chainChanged", "0x" + id.toString(16));
