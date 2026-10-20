@@ -95,9 +95,32 @@ test("closing the tab drops its mode, so a reused tab id lands", async () => {
 
 test("an unknown mode is refused with -32602 and changes nothing", async () => {
   await setup();
-  const r = await call(7, "agiterra_setSwitchMode", [{ mode: "reject" }]);
+  const r = await call(7, "agiterra_setSwitchMode", [{ mode: "bogus" }]);
   expect(r.error?.code).toBe(-32602);
-  expect(r.error?.message).toContain("mode must be one of land, ack-no-land");
+  expect(r.error?.message).toContain("mode must be one of land, ack-no-land, reject");
   await call(7, "wallet_switchEthereumChain", [{ chainId: "0x89" }]);
   expect((await call(7, "eth_chainId")).result).toBe("0x89");
+});
+
+test("reject answers 4001, leaves the chain and fires no event", async () => {
+  await setup();
+  await call(7, "wallet_switchEthereumChain", [{ chainId: "0x1" }]);
+  events = [];
+  expect((await call(7, "agiterra_setSwitchMode", [{ mode: "reject" }])).result).toBe("reject");
+  const r = await call(7, "wallet_switchEthereumChain", [{ chainId: "0xaa36a7" }]);
+  expect(r.result).toBeUndefined();
+  expect(r.error?.code).toBe(4001);
+  expect(r.error?.message).toBe("User rejected the request.");
+  expect((await call(7, "eth_chainId")).result).toBe("0x1");
+  expect(events).toEqual([]);
+});
+
+test("reject is per tab and closing the tab drops it", async () => {
+  await setup();
+  await call(7, "agiterra_setSwitchMode", ["reject"]);
+  expect((await call(8, "wallet_switchEthereumChain", [{ chainId: "0x89" }])).error).toBeUndefined();
+  onRemoved!(7);
+  await new Promise((r) => setTimeout(r, 0));
+  expect((await call(7, "wallet_switchEthereumChain", [{ chainId: "0xaa36a7" }])).error).toBeUndefined();
+  expect((await call(7, "eth_chainId")).result).toBe("0xaa36a7");
 });

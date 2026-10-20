@@ -113,7 +113,7 @@ export function installRequestHandler(
 
 /** ENG-5081 chain-switch test modes. "land" is the default and the only mode a
  *  tab has until it calls agiterra_setSwitchMode. */
-export const SWITCH_MODES = ["land", "ack-no-land"] as const;
+export const SWITCH_MODES = ["land", "ack-no-land", "reject"] as const;
 export type SwitchMode = (typeof SWITCH_MODES)[number];
 const SWITCH_MODE_PREFIX = "agiterra.switchMode.";
 
@@ -184,7 +184,9 @@ async function handle(
   // Non-standard test mode (ENG-5081): agiterra_setSwitchMode({mode}) sets how
   // THIS tab's wallet_switchEthereumChain behaves. "land" (default) switches;
   // "ack-no-land" returns success but leaves the chain unchanged, so a dApp's
-  // "switch acknowledged but never landed" path can be FV'd. Per tab, held in
+  // "switch acknowledged but never landed" path can be FV'd; "reject" answers
+  // 4001 (user rejected) and leaves the chain unchanged, the negative control
+  // for that path. Per tab, held in
   // chrome.storage.session (survives SW suspension), dropped when the tab closes.
   if (method === "agiterra_setSwitchMode") {
     const tabId = resolveOwnTabId(sender);
@@ -214,9 +216,14 @@ async function handle(
       return { error: { code: -32602, message: (e as Error).message } };
     }
     const tabId = resolveOwnTabId(sender);
-    if (tabId != null && (await getSwitchMode(tabId)) === "ack-no-land") {
+    const mode = tabId != null ? await getSwitchMode(tabId) : "land";
+    if (mode === "ack-no-land") {
       console.warn(`[wallet-vault] tab ${tabId} switch to ${id} acknowledged, NOT landed (ack-no-land test mode)`);
       return { result: null };
+    }
+    if (mode === "reject") {
+      console.warn(`[wallet-vault] tab ${tabId} switch to ${id} REJECTED with 4001 (reject test mode)`);
+      return { error: { code: 4001, message: "User rejected the request." } };
     }
     await setActiveChainId(id);
     broadcastWalletEvent("chainChanged", "0x" + id.toString(16));

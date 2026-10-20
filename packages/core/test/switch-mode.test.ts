@@ -14,7 +14,7 @@ test("parseSwitchMode accepts {mode} and a bare string for every known mode", ()
 });
 
 test("parseSwitchMode refuses unknown, missing and non-string modes", () => {
-  expect(parseSwitchMode({ mode: "reject" })).toBeNull();
+  expect(parseSwitchMode({ mode: "bogus" })).toBeNull();
   expect(parseSwitchMode({})).toBeNull();
   expect(parseSwitchMode(undefined)).toBeNull();
   expect(parseSwitchMode(null)).toBeNull();
