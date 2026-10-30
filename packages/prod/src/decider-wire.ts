@@ -10,7 +10,8 @@
  *   3. Await matching wallet.sign.response by request_id; on receipt,
  *      verify the source agent is in the wallet's access list (per the
  *      WalletDirectory) before resolving the promise. Reject otherwise.
- *   4. Time out after 60s.
+ *   4. Time out after 180s. A pod lane's inbox session can cold-start on the
+ *      request: eng-2473 approved after 64 s on 2026-10-30 and missed a 60 s cap.
  */
 
 import type { DeciderConfig, SignRequest, SignResponse } from "@agiterra/wallet-tools";
@@ -19,7 +20,9 @@ import { WALLET_SIGN_REQUEST, WALLET_SIGN_RESPONSE } from "@agiterra/wallet-tool
 import type { WireConnection } from "./wire-connection.js";
 import type { WalletDirectory } from "./wallet-directory.js";
 
-const DEFAULT_TIMEOUT_MS = 60_000;
+export const DEFAULT_TIMEOUT_MS = 180_000;
+/** Timed-out request ids kept so a late response is logged, not silently dropped. */
+const TIMED_OUT_KEEP = 64;
 const DECIDER_TARGET_KEY = "agiterra-wallet-extension-decider-target";
 
 /**
@@ -36,6 +39,7 @@ interface PendingEntry {
 
 export class WireDecider implements Decider {
   private pending = new Map<string, PendingEntry>();
+  private timedOut = new Map<string, number>();
   private unsubscribe: (() => void) | null = null;
 
   constructor(
@@ -59,7 +63,16 @@ export class WireDecider implements Decider {
       if (!candidate || typeof candidate.request_id !== "string") return;
 
       const entry = this.pending.get(candidate.request_id);
-      if (!entry) return; // not for us, or already timed out
+      if (!entry) {
+        const timedOutAt = this.timedOut.get(candidate.request_id);
+        if (timedOutAt !== undefined) {
+          console.warn(
+            `[wallet-vault] late wallet.sign.response for ${candidate.request_id} from '${event.source}': ` +
+            `arrived ${Date.now() - timedOutAt}ms after the ${this.timeoutMs}ms timeout; the dApp already got the timeout error`,
+          );
+        }
+        return; // not for us, or already timed out
+      }
 
       // Allowlist enforcement: response source must be in the wallet's access list.
       // If the wallet isn't in the directory at all, we reject — better to fail
@@ -90,6 +103,8 @@ export class WireDecider implements Decider {
       });
       setTimeout(() => {
         if (this.pending.delete(req.request_id)) {
+          this.timedOut.set(req.request_id, Date.now());
+          if (this.timedOut.size > TIMED_OUT_KEEP) this.timedOut.delete(this.timedOut.keys().next().value!);
           reject(new Error(`WireDecider timeout after ${this.timeoutMs}ms (no wallet.sign.response for ${req.request_id})`));
         }
       }, this.timeoutMs);
@@ -120,5 +135,6 @@ export class WireDecider implements Decider {
     this.unsubscribe?.();
     this.unsubscribe = null;
     this.pending.clear();
+    this.timedOut.clear();
   }
 }
