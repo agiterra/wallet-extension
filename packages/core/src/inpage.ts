@@ -4,8 +4,8 @@
  * postMessage. The content script forwards to the background service
  * worker, which talks to the configured Decider.
  *
- * Loaded by content-script.ts via a <script src="inpage.js"> injection
- * (web_accessible_resources). Once loaded, dApps see a standard
+ * Loaded as a MAIN-world content script at document_start (manifest), so it
+ * runs before any page script. Once loaded, dApps see a standard
  * EIP-1193 provider and have no way to tell it from MetaMask, except
  * by EIP-6963 announcements (which we control).
  *

@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Agiterra Wallet",
-  "version": "0.4.6",
+  "version": "0.4.7",
   "description": "Agent-driven EOA wallet for dApp interaction. Multi-wallet vault with Wire-mediated, manual, or local-RPC signing.",
   "permissions": [
     "storage",
@@ -28,16 +28,17 @@
       "run_at": "document_start",
       "world": "ISOLATED",
       "all_frames": false
-    }
-  ],
-  "web_accessible_resources": [
+    },
     {
-      "resources": [
-        "inpage.js"
-      ],
       "matches": [
         "<all_urls>"
-      ]
+      ],
+      "js": [
+        "inpage.js"
+      ],
+      "run_at": "document_start",
+      "world": "MAIN",
+      "all_frames": false
     }
   ],
   "action": {

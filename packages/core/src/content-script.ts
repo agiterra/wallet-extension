@@ -1,21 +1,17 @@
 /**
  * Content script — runs in the extension's ISOLATED world per page.
  * Two jobs:
- *   1. Inject inpage.js into the page's MAIN world (so window.ethereum
- *      is set up before any dApp script runs).
- *   2. Bridge messages between the page and the background service worker.
+ *   Bridge messages between the page and the background service worker.
+ *   (inpage.js is its own MAIN-world content script in the manifest: a
+ *   <script src> injection runs async, so on a reload a cached dApp
+ *   bundle could init before window.ethereum existed. Dynamic then
+ *   restored no wallet, wagmi kept 0 connections (ENG-5331 FV, eng-2452).)
  *
  * The bridge is unidirectional-per-message: page sends a
  * `agiterra-wallet-inpage` message via window.postMessage; we forward
  * it to background via chrome.runtime.sendMessage. Background eventually
  * resolves; we postMessage the response back to the page.
  */
-
-// Inject inpage.js into the MAIN world.
-const script = document.createElement("script");
-script.src = chrome.runtime.getURL("inpage.js");
-script.onload = () => script.remove();
-(document.head || document.documentElement).appendChild(script);
 
 interface BridgeMessage {
   source: "agiterra-wallet-inpage";
