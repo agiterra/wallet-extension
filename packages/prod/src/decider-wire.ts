@@ -12,10 +12,13 @@
  *      WalletDirectory) before resolving the promise. Reject otherwise.
  *   4. Time out after 180s. A pod lane's inbox session can cold-start on the
  *      request: eng-2473 approved after 64 s on 2026-10-30 and missed a 60 s cap.
+ *   5. After an approve, publish wallet.sign.result {request_id, result | error}
+ *      to the same agent. eng-2792 r13 (2026-11-04): an approved repay failed in
+ *      estimateGas and the approver never learned it.
  */
 
 import type { DeciderConfig, SignRequest, SignResponse } from "@agiterra/wallet-tools";
-import type { Decider } from "@agiterra/wallet-extension-core";
+import type { Decider, SigningResult } from "@agiterra/wallet-extension-core";
 import { WALLET_SIGN_REQUEST, WALLET_SIGN_RESPONSE } from "@agiterra/wallet-tools/topics";
 import type { WireConnection } from "./wire-connection.js";
 import type { WalletDirectory } from "./wallet-directory.js";
@@ -24,6 +27,12 @@ export const DEFAULT_TIMEOUT_MS = 180_000;
 /** Timed-out request ids kept so a late response is logged, not silently dropped. */
 const TIMED_OUT_KEEP = 64;
 const DECIDER_TARGET_KEY = "agiterra-wallet-extension-decider-target";
+/**
+ * Same topic and payload shape the wallet-vault service posts for vault-custodied
+ * signs, so a lane reads one event kind whichever signer it used.
+ * Not in @agiterra/wallet-tools/topics yet (v0.3.1).
+ */
+export const WALLET_SIGN_RESULT = "wallet.sign.result";
 
 /**
  * Resolve which Wire agent should decide a given sign request.
@@ -40,6 +49,8 @@ interface PendingEntry {
 export class WireDecider implements Decider {
   private pending = new Map<string, PendingEntry>();
   private timedOut = new Map<string, number>();
+  /** request_id -> agent the request went to (null = broadcast), read by report(). */
+  private targets = new Map<string, string | null>();
   private unsubscribe: (() => void) | null = null;
 
   constructor(
@@ -94,6 +105,8 @@ export class WireDecider implements Decider {
   async decide(req: SignRequest): Promise<SignResponse> {
     let target = await this.resolveTarget(req);
     if (!target) target = await this.fallbackDeciderTarget();
+    this.targets.set(req.request_id, target);
+    if (this.targets.size > TIMED_OUT_KEEP) this.targets.delete(this.targets.keys().next().value!);
 
     const responsePromise = new Promise<SignResponse>((resolve, reject) => {
       this.pending.set(req.request_id, {
@@ -124,6 +137,24 @@ export class WireDecider implements Decider {
     return responsePromise;
   }
 
+  async report(req: SignRequest, outcome: SigningResult): Promise<void> {
+    if (!this.targets.has(req.request_id)) {
+      console.warn(`[wallet-vault] no decider target recorded for ${req.request_id}; wallet.sign.result not sent`);
+      return;
+    }
+    const target = this.targets.get(req.request_id) ?? null;
+    this.targets.delete(req.request_id);
+    const payload = {
+      request_id: req.request_id,
+      method: req.method,
+      wallet_address: req.wallet_address,
+      chain_id: req.chain_id,
+      ...(outcome.error ? { error: outcome.error } : { result: outcome.result }),
+    };
+    if (target) await this.connection.publish(WALLET_SIGN_RESULT, payload, target);
+    else await this.connection.publish(WALLET_SIGN_RESULT, payload);
+  }
+
   private async fallbackDeciderTarget(): Promise<string | null> {
     const stored = await chrome.storage.local.get(DECIDER_TARGET_KEY);
     const target = stored[DECIDER_TARGET_KEY] as string | undefined;
@@ -136,5 +167,6 @@ export class WireDecider implements Decider {
     this.unsubscribe = null;
     this.pending.clear();
     this.timedOut.clear();
+    this.targets.clear();
   }
 }

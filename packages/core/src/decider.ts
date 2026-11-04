@@ -10,10 +10,17 @@
  */
 
 import type { DeciderConfig, SignRequest, SignResponse } from "@agiterra/wallet-tools";
+import type { SigningResult } from "./sign.js";
 
 export interface Decider {
   /** Ask the configured decider what to do with this sign request. */
   decide(req: SignRequest): Promise<SignResponse>;
+  /**
+   * Tell the decider what happened after it approved: the tx hash / signature,
+   * or the error the dApp got. Without it an approved tx that fails (estimateGas
+   * revert, broadcast error) is invisible to the agent that said yes (eng-2792 r13).
+   */
+  report?(req: SignRequest, outcome: SigningResult): Promise<void>;
 }
 
 /**

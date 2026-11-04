@@ -318,20 +318,26 @@ async function handle(
         // TODO(v0.3+): apply override.params before signing. v0.2 rejects.
         return { error: { code: -32603, message: "approve_with_override not yet implemented" } };
       case "approve": {
+        let outcome: SignResult;
         try {
           const privateKeyHex = await unlockPrivateKey(wallet);
           const signedChain = await getActiveChainId();
-          const signed = await signEip1193(method, params, {
+          outcome = await signEip1193(method, params, {
             privateKeyHex,
             address: wallet.address,
             chainId: signedChain,
           });
-          return signed;
         } catch (e) {
           const err = e as Error;
           console.error("[wallet-vault] signing failed:", err);
-          return { error: { code: -32603, message: `Signing failed: ${err.message}` } };
+          outcome = { error: { code: -32603, message: `Signing failed: ${err.message}` } };
         }
+        if (outcome.error) console.error(`[wallet-vault] approved ${signReq.request_id} failed:`, outcome.error);
+        // Fire-and-forget: the dApp must not wait on the Wire for its answer.
+        decider.report?.(signReq, outcome).catch((e: Error) => {
+          console.error(`[wallet-vault] report of ${signReq.request_id} to decider failed:`, e);
+        });
+        return outcome;
       }
     }
   }
